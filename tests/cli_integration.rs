@@ -80,6 +80,29 @@ fn add_uses_environment_configuration_and_persists_annotations_when_hidden() {
 }
 
 #[test]
+fn add_retries_transient_failures_before_succeeding() {
+    let temp_home = TempDir::new().expect("temp home should exist");
+    let server = MockServer::start(vec![
+        MockResponse::status(503, "retry-once"),
+        MockResponse::json(success_body(seed_add_payload())),
+    ]);
+
+    let output = assert_success(run_nan(
+        temp_home.path(),
+        &server.base_url,
+        &["add", "我今天喝咖啡"],
+    ));
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("我今天喝咖啡。"));
+
+    let database = load_database(temp_home.path());
+    assert_eq!(database.sentences.len(), 1);
+
+    let requests = server.finish();
+    assert_eq!(requests.len(), 2);
+}
+
+#[test]
 fn new_filters_highly_similar_sentences_by_word_overlap() {
     let temp_home = TempDir::new().expect("temp home should exist");
     let server = MockServer::start(vec![

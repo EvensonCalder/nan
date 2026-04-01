@@ -267,12 +267,6 @@ pub struct AddAiSpan {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-    use std::thread;
-
-    use serde::Deserialize;
-
     use super::{ChatCompletionResponse, MessageContent, preferred_string};
 
     #[test]
@@ -366,56 +360,5 @@ mod tests {
         assert!(super::is_transient_status(429));
         assert!(super::is_transient_status(503));
         assert!(!super::is_transient_status(400));
-    }
-
-    #[derive(Debug, Deserialize, PartialEq, Eq)]
-    struct RetryPayload {
-        ok: bool,
-    }
-
-    #[test]
-    fn chat_json_retries_transient_http_failures() {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
-        let address = listener.local_addr().expect("listener should have address");
-
-        let server = thread::spawn(move || {
-            for attempt in 0..2 {
-                let (mut stream, _) = listener.accept().expect("request should arrive");
-                let mut buffer = [0_u8; 4096];
-                let _ = stream
-                    .read(&mut buffer)
-                    .expect("request should be readable");
-
-                if attempt == 0 {
-                    write!(
-                        stream,
-                        "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 5\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nretry"
-                    )
-                    .expect("response should write");
-                } else {
-                    let body = r#"{"choices":[{"message":{"content":"{\"ok\":true}"}}]}"#;
-                    write!(
-                        stream,
-                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
-                        body.len(),
-                        body
-                    )
-                    .expect("response should write");
-                }
-                stream.flush().expect("response should flush");
-            }
-        });
-
-        let client = super::AiClient {
-            base_url: format!("http://{address}"),
-            api_key: "test-key".to_string(),
-            model: "test-model".to_string(),
-        };
-
-        let payload: RetryPayload = client
-            .chat_json("system", "user")
-            .expect("request should succeed after retry");
-        assert_eq!(payload, RetryPayload { ok: true });
-        server.join().expect("server thread should finish");
     }
 }
