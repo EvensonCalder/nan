@@ -189,11 +189,6 @@ That means:
 
 Sentences are stored in insertion order.
 
-Display indexes are derived from the current array order:
-
-- the first sentence is shown as `1`
-- after deletion, later sentences shift forward automatically
-
 Each sentence stores:
 
 - stable internal `id`
@@ -227,23 +222,11 @@ Word records are intended to represent a word family rather than just one surfac
 
 ## Memory Logic
 
-The review system tracks memory on words, not on whole sentences.
-
-Initial stability:
-
-- `S0 = 0.018`
-
-Parameters:
-
-- `beta = 0.25`
-- `a = 0.6`
-- `b = 0.08`
+The review system tracks memory on words.
 
 Time is stored internally in Unix seconds and converted into days for the review formula.
 
-When `cat` reviews a sentence, all words attached to that sentence are updated with the configured stability equation.
-
-Lower memory score means higher review priority.
+When `cat` reviews a sentence, all words attached to that sentence are updated.
 
 ## Generation Logic
 
@@ -306,50 +289,8 @@ Output is rendered in this order:
 3. furigana
 4. Japanese sentence
 
-Rendering rules:
-
-- alignment is the primary goal
-- extra blank space is acceptable when needed for alignment
-- text must not be compressed into misalignment
-
-The renderer uses token-level block widths.
-
-For each token:
-
-- compute the width needed by the Japanese token itself
-- compute the width needed by romaji
-- compute the width needed by furigana spans
-- expand the token block until annotations fit cleanly
-
-Then the rows are joined without forcing text to overlap.
-
 `roomaji` and `furigana` settings only affect display.
 The data is still requested from AI and stored even when those toggles are off.
-
-## Language Rewrite Logic
-
-Changing `lan` does not just update one setting.
-It triggers a resumable rewrite process.
-
-What gets rewritten:
-
-- sentence translations
-- word translations
-- word analyses
-- sentence-side token glosses, synchronized from the rewritten word data
-
-How it works:
-
-- target `lan` is written into settings
-- sentence and word rewrite status is tracked per record
-- each successful item is saved immediately
-- interruption is recoverable
-
-Startup behavior:
-
-- if stored sentence/word languages are inconsistent with settings
-- interactive runs ask the user to choose a target language and continue rewriting
-- non-interactive runs fail immediately with a recovery hint instead of blocking
 
 ## AI Compatibility Logic
 
@@ -359,19 +300,6 @@ Compatibility decisions:
 
 - environment variables override config file values
 - structured reasoning fields are ignored
-- only assistant `content` is parsed as result payload
-- transient request failures are retried automatically
-
-Current retry targets:
-
-- `408`
-- `409`
-- `425`
-- `429`
-- `5xx`
-- transport/network errors
-
-The prompts require strict JSON output so local parsing stays deterministic.
 
 ## Storage File
 
@@ -387,6 +315,5 @@ This keeps backup, inspection, and migration simple.
 
 ## Notes
 
-- The entire codebase is written in English.
-- The binary is intended to work well on macOS.
+- The binary is currently intended to work well on macOS.
 - Terminal alignment still depends slightly on the terminal font, but the layout logic is width-aware and annotation-safe.
