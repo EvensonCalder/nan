@@ -234,6 +234,97 @@ fn set_lan_rewrites_sentences_and_words_and_syncs_sentence_glosses() {
     assert_eq!(requests[4]["model"], TEST_MODEL);
 }
 
+#[test]
+fn noninteractive_language_mismatch_returns_recovery_error() {
+    let temp_home = TempDir::new().expect("temp home should exist");
+    fs::write(
+        temp_home.path().join(CONFIG_FILE_NAME),
+        json!({
+            "schema_version": 1,
+            "settings": {
+                "ref_capacity": 10,
+                "level": "n5.5",
+                "base_url": "https://api.openai.com/v1",
+                "api_key": null,
+                "model": "gpt-4o-mini",
+                "romaji_enabled": true,
+                "furigana_enabled": true,
+                "lan": "english"
+            },
+            "sentences": [
+                {
+                    "id": 1,
+                    "lan": "chinese",
+                    "source_text": "猫です。",
+                    "translated_text": "这是猫。",
+                    "style": null,
+                    "created_at_unix_secs": 0,
+                    "updated_at_unix_secs": 0,
+                    "romaji_line": "neko desu.",
+                    "furigana_line": "猫[ねこ]です。",
+                    "tokens": [],
+                    "word_ids": [1],
+                    "rewrite_status": "done",
+                    "rewrite_error": null
+                }
+            ],
+            "words": [
+                {
+                    "id": 1,
+                    "lan": "chinese",
+                    "canonical_form": "猫",
+                    "translation": "猫",
+                    "analysis": "名词",
+                    "variants": ["猫", "ねこ"],
+                    "source_sentence_ids": [1],
+                    "s_last_days": 0.018,
+                    "t_last_unix_secs": 0,
+                    "created_at_unix_secs": 0,
+                    "updated_at_unix_secs": 0,
+                    "rewrite_status": "done",
+                    "rewrite_error": null
+                }
+            ],
+            "language_rewrite": null,
+            "next_sentence_id": 2,
+            "next_word_id": 2
+        })
+        .to_string(),
+    )
+    .expect("mismatch config should write");
+
+    let output = assert_failure(run_nan(temp_home.path(), "http://127.0.0.1:1", &["list"]));
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    assert!(stderr.contains("stored data uses inconsistent languages"));
+    assert!(stderr.contains("interactive terminal"));
+}
+
+#[test]
+fn add_reports_error_after_retries_are_exhausted() {
+    let temp_home = TempDir::new().expect("temp home should exist");
+    let server = MockServer::start(vec![
+        MockResponse::status(503, "retry-1"),
+        MockResponse::status(503, "retry-2"),
+        MockResponse::status(503, "retry-3"),
+    ]);
+
+    let output = assert_failure(run_nan(
+        temp_home.path(),
+        &server.base_url,
+        &["add", "我今天喝咖啡"],
+    ));
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    assert!(stderr.contains("AI request failed with HTTP status 503"));
+    assert!(stderr.contains("retry-3"));
+
+    let database = load_database(temp_home.path());
+    assert!(database.sentences.is_empty());
+    assert!(database.words.is_empty());
+
+    let requests = server.finish();
+    assert_eq!(requests.len(), 3);
+}
+
 fn seed_add_payload() -> Value {
     json!({
         "japanese_sentence": "私は今日コーヒーを飲みます。",
@@ -313,6 +404,17 @@ fn assert_success(output: Output) -> Output {
     output
 }
 
+fn assert_failure(output: Output) -> Output {
+    if output.status.success() {
+        panic!(
+            "command unexpectedly succeeded\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+    output
+}
+
 fn load_database(home: &Path) -> Database {
     let path = home.join(CONFIG_FILE_NAME);
     let content = fs::read_to_string(path).expect("config file should exist");
@@ -382,6 +484,14 @@ impl MockResponse {
             status: 200,
             body: body.to_string(),
             content_type: "application/json",
+        }
+    }
+
+    fn status(status: u16, body: &str) -> Self {
+        Self {
+            status,
+            body: body.to_string(),
+            content_type: "text/plain",
         }
     }
 }
