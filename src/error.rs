@@ -1,23 +1,49 @@
-use std::error::Error;
-use std::fmt::{Display, Formatter};
+use std::path::PathBuf;
 
-#[derive(Debug)]
-pub struct NanError {
-    message: String,
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum NanError {
+    #[error("{0}")]
+    Message(String),
+    #[error("failed to locate the home directory")]
+    HomeDirectoryUnavailable,
+    #[error("failed to read {path}: {source}")]
+    ReadFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to write {path}: {source}")]
+    WriteFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to create directory {path}: {source}")]
+    CreateDirectory {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to parse JSON in {path}: {source}")]
+    ParseJson {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("failed to serialize JSON for {path}: {source}")]
+    SerializeJson {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("invalid data: {0}")]
+    InvalidData(String),
 }
 
 impl NanError {
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
+    pub fn message(message: impl Into<String>) -> Self {
+        Self::Message(message.into())
     }
 }
-
-impl Display for NanError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl Error for NanError {}

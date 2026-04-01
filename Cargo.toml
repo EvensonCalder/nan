@@ -3,4 +3,16 @@ name = "nan"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "nan"
+path = "src/lib.rs"
+
 [dependencies]
+clap = { version = "4.5.40", features = ["derive"] }
+home = "0.5.11"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+tempfile = "3.20.0"
+thiserror = "2.0.17"
+unicode-width = "0.2.0"
+ureq = { version = "2.12.1", features = ["json"] }
