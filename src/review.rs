@@ -72,6 +72,10 @@ pub fn apply_review(state: ReviewState, now_unix_secs: i64) -> Result<ReviewStat
     })
 }
 
+pub fn review_priority(score: f64) -> f64 {
+    1.0 - score.clamp(0.0, 1.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ReviewState, apply_review, review_memory_score};

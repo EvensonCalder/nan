@@ -79,11 +79,106 @@ pub fn build_add_user_prompt(
     prompt
 }
 
+pub fn build_new_user_prompt(
+    count: usize,
+    style: Option<&str>,
+    level: ProficiencyLevel,
+    native_language: NativeLanguage,
+    reference_words: &[String],
+    reference_sentences: &[String],
+) -> String {
+    let mut prompt = String::new();
+    prompt.push_str("Task:\n");
+    prompt.push_str("1. Generate natural new Japanese sentences for study.\n");
+    prompt.push_str("2. Match the requested proficiency level.\n");
+    prompt.push_str("3. Reuse the reference words when reasonable, especially the weaker ones.\n");
+    prompt.push_str(
+        "4. Do not generate sentences that are too similar to the reference sentences.\n",
+    );
+    prompt.push_str("5. Return exactly the requested number of candidates.\n");
+    prompt.push_str("6. For every generated sentence, provide the same token analysis schema as in the add flow.\n\n");
+
+    prompt.push_str(&format!("Candidate count: {}\n", count * 2));
+    prompt.push_str(&format!("Target proficiency level: {}\n", level.as_str()));
+    prompt.push_str(&format!(
+        "Native language for translation and token analysis: {}\n",
+        native_language.as_str()
+    ));
+
+    if let Some(style) = style {
+        prompt.push_str(&format!("Requested style: {style}\n"));
+    } else {
+        prompt.push_str("Requested style: none\n");
+    }
+
+    if reference_words.is_empty() {
+        prompt.push_str("Reference words: none\n");
+    } else {
+        prompt.push_str("Reference words:\n");
+        for word in reference_words {
+            prompt.push_str("- ");
+            prompt.push_str(word);
+            prompt.push('\n');
+        }
+    }
+
+    if reference_sentences.is_empty() {
+        prompt.push_str("Reference sentences to avoid similarity with: none\n");
+    } else {
+        prompt.push_str("Reference sentences to avoid similarity with:\n");
+        for sentence in reference_sentences {
+            prompt.push_str("- ");
+            prompt.push_str(sentence);
+            prompt.push('\n');
+        }
+    }
+
+    prompt.push_str("\nReturn exactly one JSON object with this schema:\n");
+    prompt.push_str(
+        r#"{
+  "sentences": [
+    {
+      "japanese_sentence": "string",
+      "translated_sentence": "string in the requested native language",
+      "romaji_line": "string",
+      "furigana_line": "string",
+      "tokens": [
+        {
+          "surface": "string",
+          "reading": "string or null",
+          "romaji": "string or null",
+          "lemma": "dictionary form or null",
+          "gloss": "short translation in the requested native language",
+          "analysis": "short learner-friendly explanation in the requested native language",
+          "variants": ["string", "..."],
+          "spans": [
+            {
+              "text": "string",
+              "reading": "string or null"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}"#,
+    );
+    prompt.push_str("\n\nRules:\n");
+    prompt.push_str("- The JSON must be valid.\n");
+    prompt.push_str("- Every sentence must be distinct.\n");
+    prompt.push_str("- Every sentence must contain at least one token.\n");
+    prompt.push_str(
+        "- Use only the requested native language for translations and token analyses.\n",
+    );
+    prompt.push_str("- Prefer sentence patterns that help review weak words naturally.\n");
+    prompt
+}
+
 #[cfg(test)]
 mod tests {
     use crate::model::{NativeLanguage, ProficiencyLevel};
 
-    use super::build_add_user_prompt;
+    use super::{build_add_user_prompt, build_new_user_prompt};
 
     #[test]
     fn add_prompt_mentions_style_when_present() {
@@ -96,5 +191,21 @@ mod tests {
         assert!(prompt.contains("Requested style: Natsume Soseki"));
         assert!(prompt.contains("Target proficiency level: n4"));
         assert!(prompt.contains("Native language for translation and token analysis: chinese"));
+    }
+
+    #[test]
+    fn new_prompt_mentions_candidate_count_and_references() {
+        let prompt = build_new_user_prompt(
+            2,
+            Some("daily"),
+            ProficiencyLevel::N5,
+            NativeLanguage::English,
+            &["食べる (eat)".to_string()],
+            &["今朝はパンを食べました。".to_string()],
+        );
+        assert!(prompt.contains("Candidate count: 4"));
+        assert!(prompt.contains("Reference words:"));
+        assert!(prompt.contains("Reference sentences to avoid similarity with:"));
+        assert!(prompt.contains("Requested style: daily"));
     }
 }

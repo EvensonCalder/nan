@@ -25,7 +25,7 @@ pub fn run(store: &Store, sentence: String, style: Option<String>) -> Result<(),
     Ok(())
 }
 
-fn insert_sentence(
+pub(crate) fn insert_sentence(
     database: &mut Database,
     response: AddAiResponse,
     style: Option<String>,
@@ -161,7 +161,7 @@ fn upsert_word(database: &mut Database, token: &crate::ai::AddAiToken, now_unix_
     word_id
 }
 
-fn current_unix_secs() -> Result<i64, NanError> {
+pub(crate) fn current_unix_secs() -> Result<i64, NanError> {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| {

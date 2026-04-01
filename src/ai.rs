@@ -149,6 +149,11 @@ pub struct AddAiResponse {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct NewAiResponse {
+    pub sentences: Vec<AddAiResponse>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AddAiToken {
     pub surface: String,
     pub reading: Option<String>,
