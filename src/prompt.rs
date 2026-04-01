@@ -1,7 +1,7 @@
 use crate::model::{NativeLanguage, ProficiencyLevel};
 
 pub fn add_system_prompt() -> &'static str {
-    "You are a precise Japanese learning assistant. You must return only valid JSON that matches the requested schema. Do not include markdown fences. Do not include any explanatory text outside the JSON object. Keep the Japanese natural, idiomatic, and appropriate for the requested proficiency level."
+    "You are a precise Japanese learning assistant. You must return only valid JSON that matches the requested schema. Do not include markdown fences. Do not include any explanatory text outside the JSON object. Keep the Japanese natural, idiomatic, and appropriate for the requested proficiency level. Prefer standard modern Japanese orthography: use common kanji for common content words when that is the natural default spelling, and do not overuse kana simplification just because the learner level is low. Kana-only spellings are still acceptable when they are genuinely more natural in ordinary writing."
 }
 
 pub fn build_add_user_prompt(
@@ -17,6 +17,9 @@ pub fn build_add_user_prompt(
     prompt.push_str("3. Match the requested proficiency level.\n");
     prompt.push_str(
         "4. If a style is provided, gently reflect that style without becoming unnatural.\n",
+    );
+    prompt.push_str(
+        "4.5. Prefer standard modern Japanese spelling with common kanji for common content words when that is natural. Do not over-simplify by converting ordinary kanji words into kana-only spellings unless kana is the more natural default.\n",
     );
     prompt.push_str("5. Provide one line of romaji for the whole sentence.\n");
     prompt.push_str("6. Provide one line of furigana for the whole sentence.\n");
@@ -73,6 +76,7 @@ pub fn build_add_user_prompt(
     prompt.push_str("- The JSON must be valid.\n");
     prompt.push_str("- `tokens` must not be empty.\n");
     prompt.push_str("- Every token must have at least one variant, and the surface form must be included in variants.\n");
+    prompt.push_str("- Prefer common kanji in the final Japanese sentence when they are part of the natural standard spelling.\n");
     prompt.push_str("- Keep punctuation as its own token when reasonable.\n");
     prompt.push_str("- `analysis` should be concise and useful for a learner.\n");
     prompt.push_str("- Use only the requested native language for `translated_sentence`, `gloss`, and `analysis`.\n");
@@ -94,6 +98,9 @@ pub fn build_new_user_prompt(
     prompt.push_str("3. Reuse the reference words when reasonable, especially the weaker ones.\n");
     prompt.push_str(
         "4. Do not generate sentences that are too similar to the reference sentences.\n",
+    );
+    prompt.push_str(
+        "4.5. Prefer standard modern Japanese spelling with common kanji for common content words when that is natural. Do not over-simplify by converting ordinary kanji words into kana-only spellings unless kana is the more natural default.\n",
     );
     prompt.push_str("5. Return exactly the requested number of candidates.\n");
     prompt.push_str("6. For every generated sentence, provide the same token analysis schema as in the add flow.\n\n");
@@ -167,6 +174,7 @@ pub fn build_new_user_prompt(
     prompt.push_str("- The JSON must be valid.\n");
     prompt.push_str("- Every sentence must be distinct.\n");
     prompt.push_str("- Every sentence must contain at least one token.\n");
+    prompt.push_str("- Prefer common kanji in the final Japanese sentence when they are part of the natural standard spelling.\n");
     prompt.push_str(
         "- Use only the requested native language for translations and token analyses.\n",
     );
@@ -221,6 +229,7 @@ mod tests {
         assert!(prompt.contains("Requested style: Natsume Soseki"));
         assert!(prompt.contains("Target proficiency level: n4"));
         assert!(prompt.contains("Native language for translation and token analysis: chinese"));
+        assert!(prompt.contains("Prefer standard modern Japanese spelling with common kanji"));
     }
 
     #[test]
@@ -237,6 +246,7 @@ mod tests {
         assert!(prompt.contains("Reference words:"));
         assert!(prompt.contains("Reference sentences to avoid similarity with:"));
         assert!(prompt.contains("Requested style: daily"));
+        assert!(prompt.contains("Prefer standard modern Japanese spelling with common kanji"));
     }
 
     #[test]
