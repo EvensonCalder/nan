@@ -29,7 +29,9 @@ impl AiClient {
             })?;
         let api_key = preferred_string(env::var(ENV_API_KEY).ok(), settings.api_key.as_deref())
             .ok_or_else(|| {
-                NanError::message("API key is not configured. Run `nan set api-key <key>` first.")
+                NanError::message(
+                    "API key is not configured. Set NAN_OPENAI_API_KEY or run `nan set api-key <key>` first.",
+                )
             })?;
         let model =
             preferred_string(env::var(ENV_MODEL).ok(), Some(&settings.model)).ok_or_else(|| {

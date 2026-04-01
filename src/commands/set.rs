@@ -3,7 +3,7 @@ use crate::cli::{SetKey, parse_native_language, parse_proficiency_level};
 use crate::error::NanError;
 use crate::model::{
     Database, LanguageRewriteState, NativeLanguage, RewriteCursor, RewritePhase, RewriteStats,
-    RewriteStatus,
+    RewriteStatus, normalize_word_key,
 };
 use crate::prompt::{
     build_sentence_rewrite_prompt, build_word_rewrite_prompt, rewrite_system_prompt,
@@ -237,10 +237,42 @@ fn rewrite_sentences(
         store.save(&database)?;
     }
 
+    sync_sentence_token_glosses(&mut database);
+
     database.language_rewrite = None;
     store.save(&database)?;
     println!("language set to {}", target_language.as_str());
     Ok(())
+}
+
+fn sync_sentence_token_glosses(database: &mut Database) {
+    for sentence in &mut database.sentences {
+        for token in &mut sentence.tokens {
+            let mut candidates = token
+                .variants
+                .iter()
+                .map(|variant| normalize_word_key(variant))
+                .collect::<Vec<_>>();
+            candidates.push(normalize_word_key(&token.surface));
+            if let Some(lemma) = &token.lemma {
+                candidates.push(normalize_word_key(lemma));
+            }
+
+            if let Some(word) = database.words.iter().find(|word| {
+                let mut word_keys = word
+                    .variants
+                    .iter()
+                    .map(|variant| normalize_word_key(variant))
+                    .collect::<Vec<_>>();
+                word_keys.push(normalize_word_key(&word.canonical_form));
+                candidates
+                    .iter()
+                    .any(|candidate| word_keys.iter().any(|word_key| word_key == candidate))
+            }) {
+                token.gloss = Some(word.translation.clone());
+            }
+        }
+    }
 }
 
 fn rebuild_rewrite_stats(database: &Database, target_language: NativeLanguage) -> RewriteStats {
@@ -298,9 +330,12 @@ fn on_off(value: bool) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use crate::model::{Database, NativeLanguage, RewriteStatus, SentenceRecord, WordRecord};
+    use crate::model::{
+        Database, NativeLanguage, RewriteStatus, SentenceRecord, SentenceToken, TokenSpan,
+        WordRecord,
+    };
 
-    use super::{has_language_mismatch, prepare_language_rewrite};
+    use super::{has_language_mismatch, prepare_language_rewrite, sync_sentence_token_glosses};
 
     #[test]
     fn mismatch_is_detected_from_records() {
@@ -346,5 +381,54 @@ mod tests {
         assert_eq!(database.settings.lan, NativeLanguage::Chinese);
         assert_eq!(database.words[0].rewrite_status, RewriteStatus::Pending);
         assert!(database.language_rewrite.is_some());
+    }
+
+    #[test]
+    fn sync_sentence_token_glosses_updates_sentence_side_glosses() {
+        let mut database = Database::default();
+        database.sentences.push(SentenceRecord {
+            id: 1,
+            lan: NativeLanguage::English,
+            source_text: "私は学生です。".to_string(),
+            translated_text: "I am a student.".to_string(),
+            style: None,
+            created_at_unix_secs: 0,
+            updated_at_unix_secs: 0,
+            romaji_line: String::new(),
+            furigana_line: String::new(),
+            tokens: vec![SentenceToken {
+                surface: "私".to_string(),
+                reading: Some("わたし".to_string()),
+                romaji: Some("watashi".to_string()),
+                lemma: Some("私".to_string()),
+                gloss: Some("我".to_string()),
+                variants: vec!["私".to_string(), "わたし".to_string()],
+                spans: vec![TokenSpan {
+                    text: "私".to_string(),
+                    reading: Some("わたし".to_string()),
+                }],
+            }],
+            word_ids: vec![1],
+            rewrite_status: RewriteStatus::Done,
+            rewrite_error: None,
+        });
+        database.words.push(WordRecord {
+            id: 1,
+            lan: NativeLanguage::English,
+            canonical_form: "私".to_string(),
+            translation: "I".to_string(),
+            analysis: "first person pronoun".to_string(),
+            variants: vec!["私".to_string(), "わたし".to_string()],
+            source_sentence_ids: vec![1],
+            s_last_days: 0.018,
+            t_last_unix_secs: 0,
+            created_at_unix_secs: 0,
+            updated_at_unix_secs: 0,
+            rewrite_status: RewriteStatus::Done,
+            rewrite_error: None,
+        });
+
+        sync_sentence_token_glosses(&mut database);
+        assert_eq!(database.sentences[0].tokens[0].gloss.as_deref(), Some("I"));
     }
 }

@@ -32,6 +32,7 @@ pub enum Command {
         n: Option<usize>,
     },
     List {
+        #[arg(allow_hyphen_values = true)]
         n: Option<isize>,
         target: Option<ListTarget>,
     },
@@ -198,5 +199,15 @@ mod tests {
             panic!("expected list command");
         };
         assert_eq!(target.unwrap_or_default(), ListTarget::Sentence);
+    }
+
+    #[test]
+    fn list_accepts_negative_values_without_double_dash() {
+        let cli = Cli::parse_from(["nan", "list", "-2", "sentence"]);
+        let Command::List { n, target } = cli.command else {
+            panic!("expected list command");
+        };
+        assert_eq!(n, Some(-2));
+        assert_eq!(target, Some(ListTarget::Sentence));
     }
 }

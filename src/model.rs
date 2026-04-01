@@ -20,18 +20,27 @@ impl NativeLanguage {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
 pub enum ProficiencyLevel {
     #[default]
+    #[serde(rename = "n5.5", alias = "n55")]
     N55,
+    #[serde(rename = "n5")]
     N5,
+    #[serde(rename = "n4.5", alias = "n45")]
     N45,
+    #[serde(rename = "n4")]
     N4,
+    #[serde(rename = "n3.5", alias = "n35")]
     N35,
+    #[serde(rename = "n3")]
     N3,
+    #[serde(rename = "n2.5", alias = "n25")]
     N25,
+    #[serde(rename = "n2")]
     N2,
+    #[serde(rename = "n1.5", alias = "n15")]
     N15,
+    #[serde(rename = "n1")]
     N1,
 }
 
@@ -224,4 +233,23 @@ pub struct WordRecord {
 
 pub fn normalize_word_key(input: &str) -> String {
     input.trim().to_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProficiencyLevel;
+
+    #[test]
+    fn proficiency_level_serializes_with_documented_values() {
+        let serialized =
+            serde_json::to_string(&ProficiencyLevel::N55).expect("level should serialize");
+        assert_eq!(serialized, "\"n5.5\"");
+    }
+
+    #[test]
+    fn proficiency_level_accepts_legacy_compact_values() {
+        let parsed: ProficiencyLevel =
+            serde_json::from_str("\"n55\"").expect("legacy level should parse");
+        assert_eq!(parsed, ProficiencyLevel::N55);
+    }
 }

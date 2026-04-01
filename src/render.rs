@@ -5,10 +5,10 @@ use crate::model::{SentenceRecord, Settings, TokenSpan};
 #[derive(Debug, Clone)]
 struct TokenLayout {
     surface: String,
-    surface_start: usize,
-    surface_width: usize,
+    block_width: usize,
     romaji: Option<String>,
     spans: Vec<SpanLayout>,
+    is_punctuation: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -40,32 +40,37 @@ pub fn render_sentence(sentence: &SentenceRecord, settings: &Settings) -> String
     }
 
     let layouts = build_layouts(sentence);
+    let mut aligned_rows = Vec::new();
     if settings.romaji_enabled {
-        lines.push(render_romaji_row(&layouts));
+        aligned_rows.push(render_romaji_row(&layouts));
     }
     if settings.furigana_enabled {
-        lines.push(render_furigana_row(&layouts));
+        aligned_rows.push(render_furigana_row(&layouts));
     }
-    lines.push(render_surface_row(&layouts));
+    aligned_rows.push(render_surface_row(&layouts));
+    lines.extend(trim_common_left_margin(&aligned_rows));
     lines.join("\n")
 }
 
 fn build_layouts(sentence: &SentenceRecord) -> Vec<TokenLayout> {
     let mut layouts = Vec::new();
-    let mut current_column = 0;
 
     for token in &sentence.tokens {
-        let gap = if layouts.is_empty() || is_punctuation(&token.surface) {
-            0
-        } else {
-            1
-        };
-        current_column += gap;
-
         let surface_width = display_width(&token.surface);
-        let surface_start = current_column;
+        let romaji_width = token.romaji.as_deref().map(display_width).unwrap_or(0);
+        let spans = if token.spans.is_empty() {
+            vec![TokenSpan {
+                text: token.surface.clone(),
+                reading: token.reading.clone(),
+            }]
+        } else {
+            token.spans.clone()
+        };
+        let block_width = required_block_width(&token.surface, romaji_width, &spans);
+        let surface_start = (block_width.saturating_sub(surface_width)) / 2;
+
         let mut span_layouts = Vec::new();
-        let mut span_column = surface_start;
+        let mut span_offset = 0;
         let spans = if token.spans.is_empty() {
             vec![TokenSpan {
                 text: token.surface.clone(),
@@ -79,20 +84,19 @@ fn build_layouts(sentence: &SentenceRecord) -> Vec<TokenLayout> {
             let span_width = display_width(&span.text);
             span_layouts.push(SpanLayout {
                 text_width: span_width,
-                start: span_column,
+                start: surface_start + span_offset,
                 reading: span.reading,
             });
-            span_column += span_width;
+            span_offset += span_width;
         }
 
         layouts.push(TokenLayout {
             surface: token.surface.clone(),
-            surface_start,
-            surface_width,
+            block_width,
             romaji: token.romaji.clone(),
             spans: span_layouts,
+            is_punctuation: is_punctuation(&token.surface),
         });
-        current_column = surface_start + surface_width;
     }
 
     layouts
@@ -100,39 +104,68 @@ fn build_layouts(sentence: &SentenceRecord) -> Vec<TokenLayout> {
 
 fn render_surface_row(layouts: &[TokenLayout]) -> String {
     let mut row = String::new();
-    let mut current_width = 0;
 
-    for layout in layouts {
-        pad_to_width(&mut row, &mut current_width, layout.surface_start);
-        row.push_str(&layout.surface);
-        current_width += layout.surface_width;
+    for (index, layout) in layouts.iter().enumerate() {
+        if index > 0 && !layout.is_punctuation {
+            row.push(' ');
+        }
+
+        row.push_str(&center_text_in_width(&layout.surface, layout.block_width));
     }
 
-    row
+    row.trim_end().to_string()
 }
 
 fn render_romaji_row(layouts: &[TokenLayout]) -> String {
-    let mut row = Vec::new();
-    for layout in layouts {
-        if let Some(romaji) = layout.romaji.as_deref() {
-            place_centered_text(&mut row, romaji, layout.surface_start, layout.surface_width);
-        }
-    }
-    render_overlay_row(&row)
+    render_annotation_row(layouts, |layout| {
+        layout.romaji.as_deref().map(str::to_owned)
+    })
 }
 
 fn render_furigana_row(layouts: &[TokenLayout]) -> String {
-    let mut row = Vec::new();
+    let mut chunks = Vec::new();
+
     for layout in layouts {
+        let mut cells = vec![Cell::Empty; layout.block_width];
         for span in &layout.spans {
-            if let Some(reading) = span.reading.as_deref()
-                && !reading.trim().is_empty()
-            {
-                place_centered_text(&mut row, reading, span.start, span.text_width);
+            if let Some(reading) = span.reading.as_deref() {
+                let reading = reading.trim();
+                if !reading.is_empty() {
+                    place_centered_text(&mut cells, reading, span.start, span.text_width);
+                }
             }
         }
+        chunks.push(render_overlay_row(&cells));
     }
-    render_overlay_row(&row)
+
+    join_chunks(layouts, &chunks)
+}
+
+fn render_annotation_row<F>(layouts: &[TokenLayout], mut annotation: F) -> String
+where
+    F: FnMut(&TokenLayout) -> Option<String>,
+{
+    let mut chunks = Vec::new();
+
+    for layout in layouts {
+        let text = annotation(layout).unwrap_or_default();
+        chunks.push(center_text_in_width(&text, layout.block_width));
+    }
+
+    join_chunks(layouts, &chunks)
+}
+
+fn join_chunks(layouts: &[TokenLayout], chunks: &[String]) -> String {
+    let mut row = String::new();
+
+    for (index, (layout, chunk)) in layouts.iter().zip(chunks.iter()).enumerate() {
+        if index > 0 && !layout.is_punctuation {
+            row.push(' ');
+        }
+        row.push_str(chunk);
+    }
+
+    row.trim_end().to_string()
 }
 
 fn place_centered_text(row: &mut Vec<Cell>, text: &str, target_start: usize, target_width: usize) {
@@ -193,10 +226,76 @@ fn render_overlay_row(row: &[Cell]) -> String {
     rendered.trim_end().to_string()
 }
 
-fn pad_to_width(buffer: &mut String, current_width: &mut usize, target_width: usize) {
-    while *current_width < target_width {
-        buffer.push(' ');
-        *current_width += 1;
+fn center_text_in_width(text: &str, width: usize) -> String {
+    let text_width = display_width(text);
+    if width <= text_width {
+        return text.to_string();
+    }
+
+    let left_padding = (width - text_width) / 2;
+    let right_padding = width - text_width - left_padding;
+    let mut rendered = String::new();
+    rendered.push_str(&" ".repeat(left_padding));
+    rendered.push_str(text);
+    rendered.push_str(&" ".repeat(right_padding));
+    rendered
+}
+
+fn trim_common_left_margin(rows: &[String]) -> Vec<String> {
+    let margin = rows
+        .iter()
+        .filter(|row| !row.trim().is_empty())
+        .map(|row| {
+            row.chars()
+                .take_while(|character| *character == ' ')
+                .count()
+        })
+        .min()
+        .unwrap_or(0);
+
+    rows.iter()
+        .map(|row| row.chars().skip(margin).collect::<String>())
+        .collect()
+}
+
+fn required_block_width(surface: &str, romaji_width: usize, spans: &[TokenSpan]) -> usize {
+    let surface_width = display_width(surface);
+    let mut block_width = surface_width.max(romaji_width);
+
+    loop {
+        let surface_start = (block_width.saturating_sub(surface_width)) / 2;
+        let mut span_offset = 0;
+        let mut fits = true;
+
+        for span in spans {
+            let span_width = display_width(&span.text);
+            if let Some(reading) = span.reading.as_deref() {
+                let reading_width = display_width(reading.trim());
+                if reading_width > 0 {
+                    let start =
+                        centered_start(surface_start + span_offset, span_width, reading_width);
+                    if start < 0 || (start as usize + reading_width) > block_width {
+                        fits = false;
+                        break;
+                    }
+                }
+            }
+            span_offset += span_width;
+        }
+
+        if fits {
+            return block_width.max(1);
+        }
+
+        block_width += 1;
+    }
+}
+
+fn centered_start(target_start: usize, target_width: usize, text_width: usize) -> isize {
+    if text_width > target_width {
+        target_start as isize - ((text_width - target_width) / 2) as isize
+    } else {
+        (target_start + (target_width - text_width) / 2) as isize
     }
 }
 
@@ -219,7 +318,7 @@ mod tests {
         NativeLanguage, RewriteStatus, SentenceRecord, SentenceToken, Settings, TokenSpan,
     };
 
-    use super::render_sentence;
+    use super::{center_text_in_width, render_sentence, trim_common_left_margin};
 
     fn sample_sentence() -> SentenceRecord {
         SentenceRecord {
@@ -301,13 +400,10 @@ mod tests {
         let rendered = render_sentence(&sentence, &settings);
         assert!(rendered.contains("去东京。"));
         assert!(rendered.contains("toukyou"));
+        assert!(rendered.contains(" iku"));
         assert!(rendered.contains("とうきょう"));
-        assert!(
-            rendered.contains("東京へ 行く。")
-                || rendered.contains("東京 へ 行く。")
-                || rendered.contains("東京 へ行く。")
-                || rendered.contains("東京へ行く。")
-        );
+        assert!(rendered.contains("東京"));
+        assert!(rendered.contains("行く。"));
     }
 
     #[test]
@@ -318,5 +414,24 @@ mod tests {
         assert!(rendered.contains("toukyou e iku."));
         assert!(rendered.contains("とうきょう へ いく。"));
         assert!(rendered.contains("東京へ行く。"));
+    }
+
+    #[test]
+    fn center_text_expands_with_spaces_without_truncation() {
+        assert_eq!(center_text_in_width("abc", 5), " abc ");
+        assert_eq!(center_text_in_width("abcdef", 3), "abcdef");
+    }
+
+    #[test]
+    fn trim_common_left_margin_shifts_all_annotation_rows_together() {
+        let rows = vec![
+            "  abc".to_string(),
+            "  def".to_string(),
+            "  ghi".to_string(),
+        ];
+        assert_eq!(
+            trim_common_left_margin(&rows),
+            vec!["abc".to_string(), "def".to_string(), "ghi".to_string()]
+        );
     }
 }
