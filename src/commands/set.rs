@@ -172,7 +172,16 @@ fn rewrite_sentences(
             target_language,
         );
         let response: SentenceRewriteAiResponse =
-            client.chat_json(rewrite_system_prompt(), &prompt)?;
+            match client.chat_json(rewrite_system_prompt(), &prompt) {
+                Ok(response) => response,
+                Err(error) => {
+                    database.sentences[index].rewrite_status = RewriteStatus::Failed;
+                    database.sentences[index].rewrite_error = Some(error.to_string());
+                    update_rewrite_error(&mut database, error.to_string(), target_language)?;
+                    store.save(&database)?;
+                    return Err(error);
+                }
+            };
         database.sentences[index].translated_text = response.translated_sentence;
         database.sentences[index].lan = target_language;
         database.sentences[index].rewrite_status = RewriteStatus::Done;
@@ -200,7 +209,17 @@ fn rewrite_sentences(
             &database.words[index].analysis,
             target_language,
         );
-        let response: WordRewriteAiResponse = client.chat_json(rewrite_system_prompt(), &prompt)?;
+        let response: WordRewriteAiResponse =
+            match client.chat_json(rewrite_system_prompt(), &prompt) {
+                Ok(response) => response,
+                Err(error) => {
+                    database.words[index].rewrite_status = RewriteStatus::Failed;
+                    database.words[index].rewrite_error = Some(error.to_string());
+                    update_rewrite_error(&mut database, error.to_string(), target_language)?;
+                    store.save(&database)?;
+                    return Err(error);
+                }
+            };
         database.words[index].translation = response.translation;
         database.words[index].analysis = response.analysis;
         database.words[index].lan = target_language;
@@ -238,8 +257,31 @@ fn rebuild_rewrite_stats(database: &Database, target_language: NativeLanguage) -
             .iter()
             .filter(|word| word.lan == target_language)
             .count(),
-        failures: 0,
+        failures: database
+            .sentences
+            .iter()
+            .filter(|sentence| matches!(sentence.rewrite_status, RewriteStatus::Failed))
+            .count()
+            + database
+                .words
+                .iter()
+                .filter(|word| matches!(word.rewrite_status, RewriteStatus::Failed))
+                .count(),
     }
+}
+
+fn update_rewrite_error(
+    database: &mut Database,
+    message: String,
+    target_language: NativeLanguage,
+) -> Result<(), NanError> {
+    let stats = rebuild_rewrite_stats(database, target_language);
+    if let Some(rewrite) = &mut database.language_rewrite {
+        rewrite.updated_at_unix_secs = current_unix_secs()?;
+        rewrite.last_error = Some(message);
+        rewrite.stats = stats;
+    }
+    Ok(())
 }
 
 fn parse_toggle(value: &str) -> Result<bool, NanError> {
