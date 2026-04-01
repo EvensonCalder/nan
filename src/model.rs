@@ -116,6 +116,18 @@ impl Database {
 
         Ok(())
     }
+
+    pub fn allocate_sentence_id(&mut self) -> u64 {
+        let id = self.next_sentence_id;
+        self.next_sentence_id += 1;
+        id
+    }
+
+    pub fn allocate_word_id(&mut self) -> u64 {
+        let id = self.next_word_id;
+        self.next_word_id += 1;
+        id
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -208,4 +220,8 @@ pub struct WordRecord {
     pub updated_at_unix_secs: i64,
     pub rewrite_status: RewriteStatus,
     pub rewrite_error: Option<String>,
+}
+
+pub fn normalize_word_key(input: &str) -> String {
+    input.trim().to_lowercase()
 }
