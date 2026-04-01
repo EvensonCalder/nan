@@ -1,3 +1,5 @@
+use std::env;
+
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -6,6 +8,9 @@ use crate::error::NanError;
 use crate::model::Settings;
 
 const CHAT_COMPLETIONS_PATH: &str = "/chat/completions";
+const ENV_BASE_URL: &str = "NAN_OPENAI_BASE_URL";
+const ENV_API_KEY: &str = "NAN_OPENAI_API_KEY";
+const ENV_MODEL: &str = "NAN_OPENAI_MODEL";
 
 #[derive(Debug, Clone)]
 pub struct AiClient {
@@ -16,14 +21,27 @@ pub struct AiClient {
 
 impl AiClient {
     pub fn from_settings(settings: &Settings) -> Result<Self, NanError> {
-        let api_key = settings.api_key.clone().ok_or_else(|| {
-            NanError::message("API key is not configured. Run `nan set api-key <key>` first.")
-        })?;
+        let base_url = preferred_string(env::var(ENV_BASE_URL).ok(), Some(&settings.base_url))
+            .ok_or_else(|| {
+                NanError::message(
+                    "base URL is not configured. Set NAN_OPENAI_BASE_URL or run `nan set base-url <url>`.",
+                )
+            })?;
+        let api_key = preferred_string(env::var(ENV_API_KEY).ok(), settings.api_key.as_deref())
+            .ok_or_else(|| {
+                NanError::message("API key is not configured. Run `nan set api-key <key>` first.")
+            })?;
+        let model =
+            preferred_string(env::var(ENV_MODEL).ok(), Some(&settings.model)).ok_or_else(|| {
+                NanError::message(
+                    "model is not configured. Set NAN_OPENAI_MODEL or run `nan set model <name>`.",
+                )
+            })?;
 
         Ok(Self {
-            base_url: settings.base_url.clone(),
+            base_url,
             api_key,
-            model: settings.model.clone(),
+            model,
         })
     }
 
@@ -78,6 +96,17 @@ impl AiClient {
             ))
         })
     }
+}
+
+fn preferred_string(env_value: Option<String>, config_value: Option<&str>) -> Option<String> {
+    env_value
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            config_value
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
 }
 
 #[derive(Debug, Deserialize)]
@@ -184,7 +213,7 @@ pub struct AddAiSpan {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChatCompletionResponse, MessageContent};
+    use super::{ChatCompletionResponse, MessageContent, preferred_string};
 
     #[test]
     fn extracts_string_content_from_response() {
@@ -235,5 +264,20 @@ mod tests {
             MessageContent::Text(text) => assert_eq!(text, "hello"),
             MessageContent::Parts(_) => panic!("expected text content"),
         }
+    }
+
+    #[test]
+    fn preferred_string_uses_environment_value_first() {
+        let resolved = preferred_string(
+            Some("https://env.example/v1".to_string()),
+            Some("https://config.example/v1"),
+        );
+        assert_eq!(resolved.as_deref(), Some("https://env.example/v1"));
+    }
+
+    #[test]
+    fn preferred_string_falls_back_to_config_when_env_is_blank() {
+        let resolved = preferred_string(Some("   ".to_string()), Some("gpt-4o-mini"));
+        assert_eq!(resolved.as_deref(), Some("gpt-4o-mini"));
     }
 }

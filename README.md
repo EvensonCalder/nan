@@ -37,6 +37,20 @@ nan set api-key YOUR_API_KEY
 nan set model gpt-4o-mini
 ```
 
+Environment variables are also supported and take priority over `~/.nanconfig.json`:
+
+```bash
+export NAN_OPENAI_BASE_URL=https://api.openai.com/v1
+export NAN_OPENAI_API_KEY=YOUR_API_KEY
+export NAN_OPENAI_MODEL=gpt-4o-mini
+```
+
+Priority order:
+
+- `NAN_OPENAI_BASE_URL` over `nan set base-url ...`
+- `NAN_OPENAI_API_KEY` over `nan set api-key ...`
+- `NAN_OPENAI_MODEL` over `nan set model ...`
+
 Optional learning settings:
 
 ```bash
