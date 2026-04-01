@@ -154,6 +154,17 @@ pub struct NewAiResponse {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SentenceRewriteAiResponse {
+    pub translated_sentence: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WordRewriteAiResponse {
+    pub translation: String,
+    pub analysis: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AddAiToken {
     pub surface: String,
     pub reading: Option<String>,

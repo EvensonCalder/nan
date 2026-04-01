@@ -174,11 +174,41 @@ pub fn build_new_user_prompt(
     prompt
 }
 
+pub fn rewrite_system_prompt() -> &'static str {
+    "You rewrite learner-facing translations and analyses. Return only valid JSON. Do not change the underlying Japanese content."
+}
+
+pub fn build_sentence_rewrite_prompt(
+    japanese_sentence: &str,
+    current_translation: &str,
+    native_language: NativeLanguage,
+) -> String {
+    format!(
+        "Rewrite the translation of this Japanese sentence into {language}.\nJapanese sentence: {japanese_sentence}\nCurrent translation: {current_translation}\n\nReturn exactly one JSON object:\n{{\n  \"translated_sentence\": \"string in {language}\"\n}}",
+        language = native_language.as_str(),
+    )
+}
+
+pub fn build_word_rewrite_prompt(
+    canonical_form: &str,
+    current_translation: &str,
+    current_analysis: &str,
+    native_language: NativeLanguage,
+) -> String {
+    format!(
+        "Rewrite the translation and short learner-facing analysis of this Japanese word into {language}.\nWord: {canonical_form}\nCurrent translation: {current_translation}\nCurrent analysis: {current_analysis}\n\nReturn exactly one JSON object:\n{{\n  \"translation\": \"short translation in {language}\",\n  \"analysis\": \"short learner-facing explanation in {language}\"\n}}",
+        language = native_language.as_str(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use crate::model::{NativeLanguage, ProficiencyLevel};
 
-    use super::{build_add_user_prompt, build_new_user_prompt};
+    use super::{
+        build_add_user_prompt, build_new_user_prompt, build_sentence_rewrite_prompt,
+        build_word_rewrite_prompt,
+    };
 
     #[test]
     fn add_prompt_mentions_style_when_present() {
@@ -207,5 +237,22 @@ mod tests {
         assert!(prompt.contains("Reference words:"));
         assert!(prompt.contains("Reference sentences to avoid similarity with:"));
         assert!(prompt.contains("Requested style: daily"));
+    }
+
+    #[test]
+    fn rewrite_prompts_include_target_language() {
+        let sentence_prompt = build_sentence_rewrite_prompt(
+            "今夜は月がきれいですね。",
+            "Tonight the moon is beautiful.",
+            NativeLanguage::Chinese,
+        );
+        let word_prompt = build_word_rewrite_prompt(
+            "食べる",
+            "eat",
+            "dictionary form of to eat",
+            NativeLanguage::English,
+        );
+        assert!(sentence_prompt.contains("chinese"));
+        assert!(word_prompt.contains("english"));
     }
 }
