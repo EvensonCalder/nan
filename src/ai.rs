@@ -90,9 +90,9 @@ impl AiClient {
         })?;
 
         let content = completion.first_text_content()?;
-        serde_json::from_str(&content).map_err(|error| {
+        serde_json::from_str(content.trim()).map_err(|error| {
             NanError::message(format!(
-                "failed to parse AI JSON payload: {error}; payload: {content}"
+                "failed to parse AI JSON payload from assistant content: {error}; payload: {content}"
             ))
         })
     }
@@ -150,6 +150,8 @@ struct ChatChoice {
 #[derive(Debug, Deserialize)]
 struct ChatMessage {
     content: MessageContent,
+    #[allow(dead_code)]
+    reasoning_content: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -279,5 +281,25 @@ mod tests {
     fn preferred_string_falls_back_to_config_when_env_is_blank() {
         let resolved = preferred_string(Some("   ".to_string()), Some("gpt-4o-mini"));
         assert_eq!(resolved.as_deref(), Some("gpt-4o-mini"));
+    }
+
+    #[test]
+    fn ignores_reasoning_content_field() {
+        let response: ChatCompletionResponse = serde_json::from_str(
+            r#"{
+                "choices": [
+                    {
+                        "message": {
+                            "reasoning_content": "hidden chain of thought",
+                            "content": "{\"ok\":true}"
+                        }
+                    }
+                ]
+            }"#,
+        )
+        .expect("response should parse");
+
+        let content = response.first_text_content().expect("content should exist");
+        assert_eq!(content, r#"{"ok":true}"#);
     }
 }
