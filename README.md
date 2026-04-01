@@ -1,19 +1,19 @@
 # nan
 
-`nan` means "what" in Japanese (`何`).
+`nan` means `何` in Japanese: "what".
 
-This project is a sentence-first Japanese learning CLI written in Rust. Instead of course-style memorization, it helps you learn Japanese through natural sentences, AI-assisted analysis, and lightweight spaced review.
+`nan` is a sentence-first Japanese learning CLI written in Rust. It is designed for natural learning instead of course-style drilling. The core idea is simple:
 
-## Features
+- learn Japanese through complete sentences
+- let AI produce natural Japanese, token analysis, romaji, and furigana
+- track memory on attached words instead of isolated word lists
+- review by selecting sentences that best cover weak words
 
-- `nan add [sentence] [style?]`
-- `nan new [n?] [style?]`
-- `nan cat [n?]`
-- `nan list [n?] [word|sentence]`
-- `nan del [n]`
-- `nan set [ref|level|base-url|api-key|model|roomaji|furigana|lan] [option]`
+All persistent data is stored in a single file:
 
-All settings and learning data are stored in `~/.nanconfig.json`.
+```text
+~/.nanconfig.json
+```
 
 ## Build
 
@@ -21,23 +21,17 @@ All settings and learning data are stored in `~/.nanconfig.json`.
 cargo build --release
 ```
 
-The standalone binary will be available at:
+The standalone binary is:
 
 ```text
 target/release/nan
 ```
 
-## Quick Start
+## Configuration
 
-Configure the AI backend first:
+`nan` supports both config-file settings and environment variables.
 
-```bash
-nan set base-url https://api.openai.com/v1
-nan set api-key YOUR_API_KEY
-nan set model gpt-4o-mini
-```
-
-Environment variables are also supported and take priority over `~/.nanconfig.json`:
+Environment variables have higher priority than `~/.nanconfig.json`:
 
 ```bash
 export NAN_OPENAI_BASE_URL=https://api.openai.com/v1
@@ -45,162 +39,354 @@ export NAN_OPENAI_API_KEY=YOUR_API_KEY
 export NAN_OPENAI_MODEL=gpt-4o-mini
 ```
 
-Priority order:
-
-- `NAN_OPENAI_BASE_URL` over `nan set base-url ...`
-- `NAN_OPENAI_API_KEY` over `nan set api-key ...`
-- `NAN_OPENAI_MODEL` over `nan set model ...`
-
-Optional learning settings:
+Config commands:
 
 ```bash
-nan set level n5.5
+nan set base-url https://api.openai.com/v1
+nan set api-key YOUR_API_KEY
+nan set model gpt-4o-mini
 nan set ref 10
+nan set level n5.5
 nan set roomaji on
 nan set furigana on
 nan set lan chinese
 ```
 
-Then start learning:
+Settings meaning:
 
-```bash
-nan add "今晚的月色真美" "Natsume Soseki"
-nan new 3 "daily"
-nan cat 5
-nan list 10 sentence
-nan list 20 word
-nan del 2
-```
+- `ref`: how many weak words are used as the reference capacity for `new`
+- `level`: target learner level used to guide AI output
+- `base-url`: OpenAI-compatible `chat/completions` base URL
+- `api-key`: API key for the chat backend
+- `model`: model name
+- `roomaji`: display toggle only; romaji is still fetched and stored
+- `furigana`: display toggle only; furigana is still fetched and stored
+- `lan`: native-language target for sentence translations and word analyses
 
-## Command Semantics
+## Commands
 
 ### `nan add [sentence] [style?]`
 
-- Translates the input into natural Japanese.
-- Generates a native-language translation.
-- Generates romaji and furigana.
-- Splits the sentence into tokens.
-- Produces learner-facing word glosses and short analyses.
-- Deduplicates words by canonical form and variant set.
+Example:
+
+```bash
+nan add "今晚的月色真美" "Natsume Soseki"
+```
+
+Behavior:
+
+- takes a source sentence in the user language
+- asks AI for a natural Japanese sentence
+- optionally nudges the output toward a style
+- stores:
+  - Japanese sentence
+  - native-language translation
+  - romaji line
+  - furigana line
+  - token analysis
+  - linked word IDs
+- deduplicates words by canonical form and known variants
 
 ### `nan new [n?] [style?]`
 
-- If the first optional argument is an integer, it is treated as `n`.
-- Otherwise, it is treated as `style`.
-- The command uses low-memory words as generation hints.
-- It asks the AI for `2 * n` candidates, then keeps the first unique valid `n` results.
+Examples:
+
+```bash
+nan new
+nan new 3
+nan new "daily"
+nan new 3 "daily"
+```
+
+Argument rule:
+
+- if the first optional argument is an integer, it is treated as `n`
+- otherwise it is treated as `style`
+
+Behavior:
+
+- finds low-memory words
+- sends those weak words and related old sentences to AI as generation references
+- asks AI for `2 * n` candidates
+- filters out:
+  - exact duplicates
+  - highly similar near-rephrasings based on token word overlap
+- stores the accepted new sentences and their words
 
 ### `nan cat [n?]`
 
-- Selects sentences that cover as many weak words as possible.
-- Updates the review state of the words inside the selected sentences.
+Example:
+
+```bash
+nan cat 5
+```
+
+Behavior:
+
+- selects sentences that cover as many weak words as possible
+- prints `n` review sentences
+- updates review state for the words contained in those sentences
 
 ### `nan list [n?] [word|sentence]`
 
-- Default target is `sentence`.
-- Positive `n`: lowest-memory-first.
-- Negative `n`: newest `-n` items.
-- `word` output is unnumbered.
-- `sentence` output is numbered.
+Examples:
+
+```bash
+nan list
+nan list 10 sentence
+nan list 20 word
+nan list -5 sentence
+nan list -20 word
+```
+
+Behavior:
+
+- default target is `sentence`
+- positive `n` means lowest-memory-first
+- negative `n` means newest `-n` items
+- `word` mode prints aligned word / translation / analysis rows
+- `sentence` mode prints aligned index / sentence / translation rows
 
 ### `nan del [n]`
 
-- Deletes the sentence with index `n`.
-- Sentence numbering closes automatically after deletion.
-- Orphaned words are removed if no sentence references them anymore.
+Example:
 
-### `nan set ...`
+```bash
+nan del 2
+```
 
-- `ref`: reference capacity for `new`
-- `level`: one of `n5.5/n5/n4.5/n4/n3.5/n3/n2.5/n2/n1.5/n1`
-- `base-url`: OpenAI-compatible chat completions base URL
-- `api-key`: API key
-- `model`: model name
-- `roomaji`: `on` or `off`
-- `furigana`: `on` or `off`
-- `lan`: `english` or `chinese`
+Behavior:
+
+- deletes the sentence with display index `n`
+- display indexes close automatically after deletion
+- removes orphaned words that are no longer referenced by any sentence
+
+### `nan set [key] [option]`
+
+Supported keys:
+
+- `ref`
+- `level`
+- `base-url`
+- `api-key`
+- `model`
+- `roomaji`
+- `furigana`
+- `lan`
 
 ## Data Model
 
-The system is sentence-first.
+`nan` is sentence-first.
 
-- Sentences are stored in creation order.
-- Display indexes are derived from the current array order.
-- Deleting a sentence automatically shifts later indexes forward.
-- Internal sentence and word references use stable numeric IDs.
+That means:
+
+- sentences are the primary learning objects
+- words are attached to sentences
+- review priority is computed from words
+- generation and review both use sentence context instead of isolated flashcard logic
+
+### Sentence Records
+
+Sentences are stored in insertion order.
+
+Display indexes are derived from the current array order:
+
+- the first sentence is shown as `1`
+- after deletion, later sentences shift forward automatically
 
 Each sentence stores:
 
-- Japanese text
-- native-language translation
+- stable internal `id`
 - `lan`
+- Japanese text
+- translated text
 - optional style
-- romaji
-- furigana
-- token analysis
+- romaji line
+- furigana line
+- token list
 - linked word IDs
+- rewrite status fields
+
+### Word Records
+
+Words are deduplicated independently from sentence display indexes.
 
 Each word stores:
 
+- stable internal `id`
+- `lan`
 - canonical form
 - translation
-- short analysis
-- variant forms
-- linked sentence IDs
-- `lan`
-- spaced-review state
+- learner-facing analysis
+- known variants
+- source sentence IDs
+- memory state
+- rewrite status fields
 
-## Review Formula
+Word records are intended to represent a word family rather than just one surface form.
 
-The review state follows the requested model.
+## Memory Logic
 
-- Initial stability: `S0 = 0.018`
+The review system tracks memory on words, not on whole sentences.
+
+Initial stability:
+
+- `S0 = 0.018`
+
+Parameters:
+
 - `beta = 0.25`
 - `a = 0.6`
 - `b = 0.08`
-- Internal timestamps use Unix seconds and are converted to days for the formula
 
-`cat` updates each reviewed word with the configured stability update rule.
+Time is stored internally in Unix seconds and converted into days for the review formula.
 
-## Language Rewrite and Recovery
+When `cat` reviews a sentence, all words attached to that sentence are updated with the configured stability equation.
 
-Changing `lan` triggers AI-based rewriting for:
+Lower memory score means higher review priority.
 
-- all sentence translations
-- all word translations
-- all word analyses
+## Generation Logic
 
-This process is resumable.
+### `add`
 
-- The target language is stored in `~/.nanconfig.json`.
-- Each sentence and word carries its own `lan` field.
-- Rewrite progress is persisted after each successful rewritten item.
-- If the process is interrupted, running `nan` again in an interactive terminal will let you choose a target language and continue.
-- In non-interactive environments, `nan` fails fast with a recovery hint instead of blocking.
+`add` asks AI for a single structured JSON result containing:
 
-## Rendering
+- Japanese sentence
+- translation in `lan`
+- romaji
+- furigana
+- token breakdown
+- per-token gloss and analysis in `lan`
+- variant forms for deduplication
 
-`nan` renders output in this order:
+The local logic then:
 
-1. Translation
-2. Romaji
-3. Furigana
+- normalizes variants
+- reuses existing words when variants overlap
+- creates new words when no existing match is found
+- links the sentence to all matched word records
+
+### `new`
+
+`new` works in two phases.
+
+Phase 1: choose references.
+
+- rank words by memory score
+- take the weakest `n * ref`
+- gather related old sentences
+
+Phase 2: filter AI candidates.
+
+- reject exact sentence duplicates
+- reject highly similar candidates using token-level word overlap
+- keep only distinct, useful new sentences
+
+This keeps `new` from filling the database with tiny paraphrases of the same sentence.
+
+## Review Logic
+
+`cat` is coverage-oriented.
+
+It does not choose sentences randomly by default. Instead, it prefers sentences that cover weak words efficiently.
+
+The selection logic tries to maximize:
+
+- uncovered weak-word coverage first
+- total weak-word weight second
+
+This helps a small number of review sentences touch more weak vocabulary.
+
+## Rendering Logic
+
+Output is rendered in this order:
+
+1. translation
+2. romaji
+3. furigana
 4. Japanese sentence
 
-The renderer uses token-level display width calculations and centers romaji and furigana as closely as possible over the related token spans.
+Rendering rules:
 
-## Quality Checks
+- alignment is the primary goal
+- extra blank space is acceptable when needed for alignment
+- text must not be compressed into misalignment
 
-The project is kept clean with:
+The renderer uses token-level block widths.
 
-```bash
-cargo fmt --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test
-```
+For each token:
+
+- compute the width needed by the Japanese token itself
+- compute the width needed by romaji
+- compute the width needed by furigana spans
+- expand the token block until annotations fit cleanly
+
+Then the rows are joined without forcing text to overlap.
+
+`roomaji` and `furigana` settings only affect display.
+The data is still requested from AI and stored even when those toggles are off.
+
+## Language Rewrite Logic
+
+Changing `lan` does not just update one setting.
+It triggers a resumable rewrite process.
+
+What gets rewritten:
+
+- sentence translations
+- word translations
+- word analyses
+- sentence-side token glosses, synchronized from the rewritten word data
+
+How it works:
+
+- target `lan` is written into settings
+- sentence and word rewrite status is tracked per record
+- each successful item is saved immediately
+- interruption is recoverable
+
+Startup behavior:
+
+- if stored sentence/word languages are inconsistent with settings
+- interactive runs ask the user to choose a target language and continue rewriting
+- non-interactive runs fail immediately with a recovery hint instead of blocking
+
+## AI Compatibility Logic
+
+`nan` expects an OpenAI-compatible `chat/completions` API.
+
+Compatibility decisions:
+
+- environment variables override config file values
+- structured reasoning fields are ignored
+- only assistant `content` is parsed as result payload
+- transient request failures are retried automatically
+
+Current retry targets:
+
+- `408`
+- `409`
+- `425`
+- `429`
+- `5xx`
+- transport/network errors
+
+The prompts require strict JSON output so local parsing stays deterministic.
+
+## Storage File
+
+Everything lives in one JSON file:
+
+- settings
+- sentences
+- words
+- rewrite progress
+- schema version
+
+This keeps backup, inspection, and migration simple.
 
 ## Notes
 
-- The AI backend must support an OpenAI-compatible `chat/completions` endpoint.
-- The prompts require strict JSON responses.
-- The current renderer is terminal-oriented and width-aware, but exact alignment can still vary slightly across fonts and terminals.
+- The entire codebase is written in English.
+- The binary is intended to work well on macOS.
+- Terminal alignment still depends slightly on the terminal font, but the layout logic is width-aware and annotation-safe.
