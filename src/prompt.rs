@@ -25,7 +25,7 @@ pub fn build_add_user_prompt(
     prompt.push_str("6. Provide one line of furigana for the whole sentence.\n");
     prompt.push_str("7. Split the Japanese sentence into meaningful tokens.\n");
     prompt.push_str(
-        "8. For each token, provide a gloss and a short learning-oriented analysis in the native language.\n",
+        "8. For each token, provide both context-specific and dictionary-style meanings in the native language.\n",
     );
     prompt.push_str(
         "9. For each token, provide enough inflectional variants to help deduplicate common forms of the same word.\n",
@@ -59,8 +59,10 @@ pub fn build_add_user_prompt(
       "reading": "string or null",
       "romaji": "string or null",
       "lemma": "dictionary form or null",
-      "gloss": "short translation in the requested native language",
-      "analysis": "short learner-friendly explanation in the requested native language",
+      "gloss": "short context-specific translation in the requested native language",
+      "analysis": "short context-specific learner-friendly explanation in the requested native language",
+      "dictionary_gloss": "short stable dictionary-style translation in the requested native language",
+      "dictionary_analysis": "short stable learner-friendly explanation for the word family in the requested native language",
       "variants": ["string", "..."],
       "spans": [
         {
@@ -76,6 +78,7 @@ pub fn build_add_user_prompt(
     prompt.push_str("- The JSON must be valid.\n");
     prompt.push_str("- `tokens` must not be empty.\n");
     prompt.push_str("- Every token must have at least one variant, and the surface form must be included in variants.\n");
+    prompt.push_str("- `dictionary_gloss` and `dictionary_analysis` should describe the word family, not just this sentence context.\n");
     prompt.push_str("- Prefer common kanji in the final Japanese sentence when they are part of the natural standard spelling.\n");
     prompt.push_str("- Keep punctuation as its own token when reasonable.\n");
     prompt.push_str("- `analysis` should be concise and useful for a learner.\n");
@@ -103,7 +106,7 @@ pub fn build_new_user_prompt(
         "4.5. Prefer standard modern Japanese spelling with common kanji for common content words when that is natural. Do not over-simplify by converting ordinary kanji words into kana-only spellings unless kana is the more natural default.\n",
     );
     prompt.push_str("5. Return exactly the requested number of candidates.\n");
-    prompt.push_str("6. For every generated sentence, provide the same token analysis schema as in the add flow.\n\n");
+    prompt.push_str("6. For every generated sentence, provide the same token schema as in the add flow, including both context-specific and dictionary-style meanings.\n\n");
 
     prompt.push_str(&format!("Candidate count: {}\n", count * 2));
     prompt.push_str(&format!("Target proficiency level: {}\n", level.as_str()));
@@ -155,8 +158,10 @@ pub fn build_new_user_prompt(
           "reading": "string or null",
           "romaji": "string or null",
           "lemma": "dictionary form or null",
-          "gloss": "short translation in the requested native language",
-          "analysis": "short learner-friendly explanation in the requested native language",
+          "gloss": "short context-specific translation in the requested native language",
+          "analysis": "short context-specific learner-friendly explanation in the requested native language",
+          "dictionary_gloss": "short stable dictionary-style translation in the requested native language",
+          "dictionary_analysis": "short stable learner-friendly explanation for the word family in the requested native language",
           "variants": ["string", "..."],
           "spans": [
             {
@@ -174,6 +179,7 @@ pub fn build_new_user_prompt(
     prompt.push_str("- The JSON must be valid.\n");
     prompt.push_str("- Every sentence must be distinct.\n");
     prompt.push_str("- Every sentence must contain at least one token.\n");
+    prompt.push_str("- `dictionary_gloss` and `dictionary_analysis` should describe the word family, not just this sentence context.\n");
     prompt.push_str("- Prefer common kanji in the final Japanese sentence when they are part of the natural standard spelling.\n");
     prompt.push_str(
         "- Use only the requested native language for translations and token analyses.\n",
@@ -229,6 +235,7 @@ mod tests {
         assert!(prompt.contains("Requested style: Natsume Soseki"));
         assert!(prompt.contains("Target proficiency level: n4"));
         assert!(prompt.contains("Native language for translation and token analysis: chinese"));
+        assert!(prompt.contains("dictionary_gloss"));
         assert!(prompt.contains("Prefer standard modern Japanese spelling with common kanji"));
     }
 
@@ -246,6 +253,7 @@ mod tests {
         assert!(prompt.contains("Reference words:"));
         assert!(prompt.contains("Reference sentences to avoid similarity with:"));
         assert!(prompt.contains("Requested style: daily"));
+        assert!(prompt.contains("dictionary_analysis"));
         assert!(prompt.contains("Prefer standard modern Japanese spelling with common kanji"));
     }
 

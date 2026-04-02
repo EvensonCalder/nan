@@ -8,7 +8,8 @@ use crate::store::Store;
 use super::add::current_unix_secs;
 
 pub fn run(store: &Store, n: Option<usize>) -> Result<(), NanError> {
-    let mut database = store.load_or_create()?;
+    let _lock = store.lock()?;
+    let mut database = store.load_or_create_unlocked()?;
     if database.sentences.is_empty() {
         return Err(NanError::message("there are no sentences to review yet"));
     }
@@ -45,7 +46,7 @@ pub fn run(store: &Store, n: Option<usize>) -> Result<(), NanError> {
         }
     }
 
-    store.save(&database)?;
+    store.save_unlocked(&database)?;
     println!("{}", rendered.join("\n\n"));
     Ok(())
 }

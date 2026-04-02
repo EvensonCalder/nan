@@ -2,6 +2,7 @@ pub mod ai;
 pub mod cli;
 pub mod commands;
 pub mod error;
+pub mod migration;
 pub mod model;
 pub mod prompt;
 pub mod render;

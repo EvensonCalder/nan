@@ -3,7 +3,7 @@ use crate::cli::{SetKey, parse_native_language, parse_proficiency_level};
 use crate::error::NanError;
 use crate::model::{
     Database, LanguageRewriteState, NativeLanguage, RewriteCursor, RewritePhase, RewriteStats,
-    RewriteStatus, normalize_word_key,
+    RewriteStatus, is_japanese_punctuation, normalize_word_key,
 };
 use crate::prompt::{
     build_sentence_rewrite_prompt, build_word_rewrite_prompt, rewrite_system_prompt,
@@ -13,10 +13,10 @@ use crate::store::Store;
 use super::add::current_unix_secs;
 
 pub fn run(store: &Store, key: SetKey, option: String) -> Result<(), NanError> {
-    let mut database = store.load_or_create()?;
-
     match key {
         SetKey::Ref => {
+            let _lock = store.lock()?;
+            let mut database = store.load_or_create_unlocked()?;
             let value = option
                 .parse::<usize>()
                 .map_err(|_| NanError::message("ref must be a positive integer"))?;
@@ -24,58 +24,70 @@ pub fn run(store: &Store, key: SetKey, option: String) -> Result<(), NanError> {
                 return Err(NanError::message("ref must be greater than 0"));
             }
             database.settings.ref_capacity = value;
-            store.save(&database)?;
+            store.save_unlocked(&database)?;
             println!("ref set to {value}");
             Ok(())
         }
         SetKey::Level => {
+            let _lock = store.lock()?;
+            let mut database = store.load_or_create_unlocked()?;
             let level = parse_proficiency_level(option.trim())?;
             database.settings.level = level;
-            store.save(&database)?;
+            store.save_unlocked(&database)?;
             println!("level set to {}", level.as_str());
             Ok(())
         }
         SetKey::BaseUrl => {
+            let _lock = store.lock()?;
+            let mut database = store.load_or_create_unlocked()?;
             let value = option.trim();
             if value.is_empty() {
                 return Err(NanError::message("base-url must not be empty"));
             }
             database.settings.base_url = value.to_string();
-            store.save(&database)?;
+            store.save_unlocked(&database)?;
             println!("base-url updated");
             Ok(())
         }
         SetKey::ApiKey => {
+            let _lock = store.lock()?;
+            let mut database = store.load_or_create_unlocked()?;
             let value = option.trim();
             if value.is_empty() {
                 return Err(NanError::message("api-key must not be empty"));
             }
             database.settings.api_key = Some(value.to_string());
-            store.save(&database)?;
+            store.save_unlocked(&database)?;
             println!("api-key updated");
             Ok(())
         }
         SetKey::Model => {
+            let _lock = store.lock()?;
+            let mut database = store.load_or_create_unlocked()?;
             let value = option.trim();
             if value.is_empty() {
                 return Err(NanError::message("model must not be empty"));
             }
             database.settings.model = value.to_string();
-            store.save(&database)?;
+            store.save_unlocked(&database)?;
             println!("model set to {value}");
             Ok(())
         }
         SetKey::Roomaji => {
+            let _lock = store.lock()?;
+            let mut database = store.load_or_create_unlocked()?;
             let value = parse_toggle(option.trim())?;
             database.settings.romaji_enabled = value;
-            store.save(&database)?;
+            store.save_unlocked(&database)?;
             println!("roomaji set to {}", on_off(value));
             Ok(())
         }
         SetKey::Furigana => {
+            let _lock = store.lock()?;
+            let mut database = store.load_or_create_unlocked()?;
             let value = parse_toggle(option.trim())?;
             database.settings.furigana_enabled = value;
-            store.save(&database)?;
+            store.save_unlocked(&database)?;
             println!("furigana set to {}", on_off(value));
             Ok(())
         }
@@ -102,14 +114,15 @@ pub(crate) fn rewrite_language(
     store: &Store,
     target_language: NativeLanguage,
 ) -> Result<(), NanError> {
-    let mut database = store.load_or_create()?;
+    let _lock = store.lock()?;
+    let mut database = store.load_or_create_unlocked()?;
     let now_unix_secs = current_unix_secs()?;
     prepare_language_rewrite(&mut database, target_language, now_unix_secs);
-    store.save(&database)?;
+    store.save_unlocked(&database)?;
 
     if database.sentences.is_empty() && database.words.is_empty() {
         database.language_rewrite = None;
-        store.save(&database)?;
+        store.save_unlocked(&database)?;
         println!("language set to {}", target_language.as_str());
         return Ok(());
     }
@@ -178,7 +191,7 @@ fn rewrite_sentences(
                     database.sentences[index].rewrite_status = RewriteStatus::Failed;
                     database.sentences[index].rewrite_error = Some(error.to_string());
                     update_rewrite_error(&mut database, error.to_string(), target_language)?;
-                    store.save(&database)?;
+                    store.save_unlocked(&database)?;
                     return Err(error);
                 }
             };
@@ -195,7 +208,7 @@ fn rewrite_sentences(
             rewrite.updated_at_unix_secs = current_unix_secs()?;
             rewrite.stats = stats;
         }
-        store.save(&database)?;
+        store.save_unlocked(&database)?;
     }
 
     for index in 0..database.words.len() {
@@ -216,7 +229,7 @@ fn rewrite_sentences(
                     database.words[index].rewrite_status = RewriteStatus::Failed;
                     database.words[index].rewrite_error = Some(error.to_string());
                     update_rewrite_error(&mut database, error.to_string(), target_language)?;
-                    store.save(&database)?;
+                    store.save_unlocked(&database)?;
                     return Err(error);
                 }
             };
@@ -234,20 +247,28 @@ fn rewrite_sentences(
             rewrite.updated_at_unix_secs = current_unix_secs()?;
             rewrite.stats = stats;
         }
-        store.save(&database)?;
+        store.save_unlocked(&database)?;
     }
 
-    sync_sentence_token_glosses(&mut database);
+    sync_sentence_token_meanings(&mut database);
 
     database.language_rewrite = None;
-    store.save(&database)?;
+    store.save_unlocked(&database)?;
     println!("language set to {}", target_language.as_str());
     Ok(())
 }
 
-fn sync_sentence_token_glosses(database: &mut Database) {
+fn sync_sentence_token_meanings(database: &mut Database) {
     for sentence in &mut database.sentences {
         for token in &mut sentence.tokens {
+            if is_japanese_punctuation(&token.surface) {
+                token.gloss = None;
+                token.analysis = None;
+                token.context_gloss = None;
+                token.context_analysis = None;
+                continue;
+            }
+
             let mut candidates = token
                 .variants
                 .iter()
@@ -270,6 +291,12 @@ fn sync_sentence_token_glosses(database: &mut Database) {
                     .any(|candidate| word_keys.iter().any(|word_key| word_key == candidate))
             }) {
                 token.gloss = Some(word.translation.clone());
+                token.analysis = Some(word.analysis.clone());
+                token.context_gloss = Some(word.translation.clone());
+                token.context_analysis = Some(word.analysis.clone());
+            } else {
+                token.gloss = None;
+                token.analysis = None;
             }
         }
     }
@@ -335,7 +362,7 @@ mod tests {
         WordRecord,
     };
 
-    use super::{has_language_mismatch, prepare_language_rewrite, sync_sentence_token_glosses};
+    use super::{has_language_mismatch, prepare_language_rewrite, sync_sentence_token_meanings};
 
     #[test]
     fn mismatch_is_detected_from_records() {
@@ -384,7 +411,7 @@ mod tests {
     }
 
     #[test]
-    fn sync_sentence_token_glosses_updates_sentence_side_glosses() {
+    fn sync_sentence_token_meanings_updates_sentence_side_meanings() {
         let mut database = Database::default();
         database.sentences.push(SentenceRecord {
             id: 1,
@@ -402,6 +429,9 @@ mod tests {
                 romaji: Some("watashi".to_string()),
                 lemma: Some("私".to_string()),
                 gloss: Some("我".to_string()),
+                analysis: Some("第一人称代词".to_string()),
+                context_gloss: Some("我".to_string()),
+                context_analysis: Some("第一人称代词".to_string()),
                 variants: vec!["私".to_string(), "わたし".to_string()],
                 spans: vec![TokenSpan {
                     text: "私".to_string(),
@@ -428,7 +458,11 @@ mod tests {
             rewrite_error: None,
         });
 
-        sync_sentence_token_glosses(&mut database);
+        sync_sentence_token_meanings(&mut database);
         assert_eq!(database.sentences[0].tokens[0].gloss.as_deref(), Some("I"));
+        assert_eq!(
+            database.sentences[0].tokens[0].analysis.as_deref(),
+            Some("first person pronoun")
+        );
     }
 }

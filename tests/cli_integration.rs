@@ -8,13 +8,15 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use nan::model::Database;
+use nan::model::{CURRENT_SCHEMA_VERSION, Database};
 use nan::store::CONFIG_FILE_NAME;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
 const TEST_API_KEY: &str = "integration-test-key";
 const TEST_MODEL: &str = "integration-test-model";
+const MIGRATION_STATE_FILE_NAME: &str = ".nanconfig.json.migration-state.json";
+const MIGRATION_BACKUP_FILE_NAME: &str = ".nanconfig.json.migration-backup.json";
 
 #[test]
 fn add_uses_environment_configuration_and_persists_annotations_when_hidden() {
@@ -77,6 +79,62 @@ fn add_uses_environment_configuration_and_persists_annotations_when_hidden() {
     let requests = server.finish();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0]["model"], TEST_MODEL);
+}
+
+#[test]
+fn list_auto_migrates_legacy_database_before_running() {
+    let temp_home = TempDir::new().expect("temp home should exist");
+    write_legacy_v1_database(temp_home.path());
+
+    let output = assert_success(run_nan(
+        temp_home.path(),
+        "http://127.0.0.1:1",
+        &["list", "1", "word"],
+    ));
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("飲む"));
+    assert!(stdout.contains("喝"));
+
+    let database = load_database(temp_home.path());
+    assert_eq!(database.schema_version, CURRENT_SCHEMA_VERSION);
+    assert_eq!(database.sentences[0].tokens[0].gloss.as_deref(), Some("喝"));
+    assert_eq!(
+        database.sentences[0].tokens[0].context_gloss.as_deref(),
+        Some("不喝")
+    );
+    assert!(!temp_home.path().join(MIGRATION_STATE_FILE_NAME).exists());
+    assert!(!temp_home.path().join(MIGRATION_BACKUP_FILE_NAME).exists());
+}
+
+#[test]
+fn list_recovers_interrupted_migration_before_running() {
+    let temp_home = TempDir::new().expect("temp home should exist");
+    let legacy = legacy_v1_database_json().to_string();
+    fs::write(temp_home.path().join(MIGRATION_BACKUP_FILE_NAME), legacy)
+        .expect("migration backup should write");
+    fs::write(
+        temp_home.path().join(MIGRATION_STATE_FILE_NAME),
+        json!({"from_version": 1, "target_version": CURRENT_SCHEMA_VERSION}).to_string(),
+    )
+    .expect("migration state should write");
+
+    assert_success(run_nan(
+        temp_home.path(),
+        "http://127.0.0.1:1",
+        &["list", "1", "word"],
+    ));
+
+    let database = load_database(temp_home.path());
+    assert_eq!(database.schema_version, CURRENT_SCHEMA_VERSION);
+    assert_eq!(database.words.len(), 1);
+    assert_eq!(database.words[0].canonical_form, "飲む");
+    assert_eq!(database.words[0].translation, "喝");
+    assert_eq!(
+        database.sentences[0].tokens[0].context_gloss.as_deref(),
+        Some("不喝")
+    );
+    assert!(!temp_home.path().join(MIGRATION_STATE_FILE_NAME).exists());
+    assert!(!temp_home.path().join(MIGRATION_BACKUP_FILE_NAME).exists());
 }
 
 #[test]
@@ -411,6 +469,77 @@ fn new_filters_highly_similar_sentences_by_word_overlap() {
 }
 
 #[test]
+fn add_keeps_dictionary_meaning_stable_when_context_is_negative() {
+    let temp_home = TempDir::new().expect("temp home should exist");
+    let server = MockServer::start(vec![
+        MockResponse::json(success_body(json!({
+            "japanese_sentence": "私はコーヒーを飲みます。",
+            "translated_sentence": "我喝咖啡。",
+            "romaji_line": "watashi wa koohii o nomimasu.",
+            "furigana_line": "私[わたし]は コーヒーを 飲[の]みます。",
+            "tokens": [
+                token_json("私", Some("私"), Some("わたし"), Some("watashi"), "我", "第一人称代词", ["私", "わたし"]),
+                token_json("コーヒー", Some("コーヒー"), Some("コーヒー"), Some("koohii"), "咖啡", "外来语名词", ["コーヒー"]),
+                token_json("を", Some("を"), Some("を"), Some("o"), "宾语标记", "宾语助词", ["を"]),
+                token_json("飲みます", Some("飲む"), Some("のみます"), Some("nomimasu"), "喝", "礼貌形动词", ["飲みます", "飲む"]),
+                token_json("。", Some("。"), None, None, "句号", "句末标点", ["。"])
+            ]
+        }))),
+        MockResponse::json(success_body(json!({
+            "japanese_sentence": "私はコーヒーを飲みません。",
+            "translated_sentence": "我不喝咖啡。",
+            "romaji_line": "watashi wa koohii o nomimasen.",
+            "furigana_line": "私[わたし]は コーヒーを 飲[の]みません。",
+            "tokens": [
+                token_json("私", Some("私"), Some("わたし"), Some("watashi"), "我", "第一人称代词", ["私", "わたし"]),
+                token_json("コーヒー", Some("コーヒー"), Some("コーヒー"), Some("koohii"), "咖啡", "外来语名词", ["コーヒー"]),
+                token_json("を", Some("を"), Some("を"), Some("o"), "宾语标记", "宾语助词", ["を"]),
+                token_json_with_dictionary(
+                    "飲みません",
+                    Some("飲む"),
+                    Some("のみません"),
+                    Some("nomimasen"),
+                    "不喝",
+                    "礼貌否定形动词",
+                    "喝",
+                    "动词原形，表示喝",
+                    ["飲みません", "飲む"],
+                ),
+                token_json("。", Some("。"), None, None, "句号", "句末标点", ["。"])
+            ]
+        }))),
+    ]);
+
+    assert_success(run_nan(
+        temp_home.path(),
+        &server.base_url,
+        &["add", "我喝咖啡"],
+    ));
+    assert_success(run_nan(
+        temp_home.path(),
+        &server.base_url,
+        &["add", "我不喝咖啡"],
+    ));
+
+    let database = load_database(temp_home.path());
+    let drink_word = database
+        .words
+        .iter()
+        .find(|word| word.canonical_form == "飲む")
+        .expect("drink word should exist");
+    assert_eq!(drink_word.translation, "喝");
+    assert_eq!(drink_word.analysis, "动词原形，表示喝");
+    assert_eq!(database.sentences[1].tokens[3].gloss.as_deref(), Some("喝"));
+    assert_eq!(
+        database.sentences[1].tokens[3].context_gloss.as_deref(),
+        Some("不喝")
+    );
+
+    let requests = server.finish();
+    assert_eq!(requests.len(), 2);
+}
+
+#[test]
 fn set_lan_rewrites_sentences_and_words_and_syncs_sentence_glosses() {
     let temp_home = TempDir::new().expect("temp home should exist");
     let server = MockServer::start(vec![
@@ -421,7 +550,8 @@ fn set_lan_rewrites_sentences_and_words_and_syncs_sentence_glosses() {
             "furigana_line": "猫[ねこ]です。",
             "tokens": [
                 token_json("猫", Some("猫"), Some("ねこ"), Some("neko"), "猫", "名词", ["猫", "ねこ"]),
-                token_json("です。", Some("です"), Some("です"), Some("desu"), "是", "礼貌语尾", ["です"])
+                token_json("です", Some("です"), Some("です"), Some("desu"), "是", "礼貌语尾", ["です"]),
+                token_json("。", Some("。"), None, None, "句号", "标点", ["。"])
             ]
         }))),
         MockResponse::json(success_body(json!({"translated_sentence": "It is a cat."}))),
@@ -464,6 +594,12 @@ fn set_lan_rewrites_sentences_and_words_and_syncs_sentence_glosses() {
         database.sentences[0].tokens[0].gloss.as_deref(),
         Some("cat")
     );
+    assert_eq!(
+        database.sentences[0].tokens[0].context_gloss.as_deref(),
+        Some("cat")
+    );
+    assert_eq!(database.sentences[0].tokens[2].gloss, None);
+    assert_eq!(database.sentences[0].tokens[2].context_gloss, None);
     assert_eq!(database.words[0].translation, "cat");
 
     let requests = server.finish();
@@ -597,6 +733,115 @@ fn token_json<const N: usize>(
         "lemma": lemma,
         "gloss": gloss,
         "analysis": analysis,
+        "dictionary_gloss": gloss,
+        "dictionary_analysis": analysis,
+        "variants": variants.into_iter().collect::<Vec<_>>(),
+        "spans": [
+            {
+                "text": surface,
+                "reading": reading
+            }
+        ]
+    })
+}
+
+fn write_legacy_v1_database(home: &Path) {
+    fs::write(
+        home.join(CONFIG_FILE_NAME),
+        legacy_v1_database_json().to_string(),
+    )
+    .expect("legacy config should write");
+}
+
+fn legacy_v1_database_json() -> Value {
+    json!({
+        "schema_version": 1,
+        "settings": {
+            "ref_capacity": 10,
+            "level": "n5.5",
+            "base_url": "https://api.openai.com/v1",
+            "api_key": null,
+            "model": "gpt-4o-mini",
+            "romaji_enabled": true,
+            "furigana_enabled": true,
+            "lan": "chinese"
+        },
+        "sentences": [
+            {
+                "id": 1,
+                "lan": "chinese",
+                "source_text": "私はコーヒーを飲みません。",
+                "translated_text": "我不喝咖啡。",
+                "style": null,
+                "created_at_unix_secs": 0,
+                "updated_at_unix_secs": 0,
+                "romaji_line": "watashi wa koohii o nomimasen.",
+                "furigana_line": "私[わたし]は コーヒーを 飲[の]みません。",
+                "tokens": [
+                    {
+                        "surface": "飲みません",
+                        "reading": "のみません",
+                        "romaji": "nomimasen",
+                        "lemma": "飲む",
+                        "gloss": "不喝",
+                        "variants": ["飲みません", "飲む"],
+                        "spans": [
+                            {
+                                "text": "飲みません",
+                                "reading": "のみません"
+                            }
+                        ]
+                    }
+                ],
+                "word_ids": [1],
+                "rewrite_status": "done",
+                "rewrite_error": null
+            }
+        ],
+        "words": [
+            {
+                "id": 1,
+                "lan": "chinese",
+                "canonical_form": "飲む",
+                "translation": "喝",
+                "analysis": "动词原形，表示喝",
+                "variants": ["飲みません", "飲む"],
+                "source_sentence_ids": [1],
+                "s_last_days": 0.018,
+                "t_last_unix_secs": 0,
+                "created_at_unix_secs": 0,
+                "updated_at_unix_secs": 0,
+                "rewrite_status": "done",
+                "rewrite_error": null
+            }
+        ],
+        "language_rewrite": null,
+        "next_sentence_id": 2,
+        "next_word_id": 2
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn token_json_with_dictionary<const N: usize>(
+    surface: &str,
+    lemma: Option<&str>,
+    reading: Option<&str>,
+    romaji: Option<&str>,
+    gloss: &str,
+    analysis: &str,
+    dictionary_gloss: &str,
+    dictionary_analysis: &str,
+    variants: [&str; N],
+) -> Value {
+    json!({
+        "surface": surface,
+        "reading": reading,
+        "romaji": romaji,
+        "lemma": lemma,
+        "gloss": gloss,
+        "analysis": analysis,
+        "dictionary_gloss": dictionary_gloss,
+        "dictionary_analysis": dictionary_analysis,
         "variants": variants.into_iter().collect::<Vec<_>>(),
         "spans": [
             {

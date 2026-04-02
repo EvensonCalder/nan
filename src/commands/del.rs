@@ -2,7 +2,8 @@ use crate::error::NanError;
 use crate::store::Store;
 
 pub fn run(store: &Store, n: usize) -> Result<(), NanError> {
-    let mut database = store.load_or_create()?;
+    let _lock = store.lock()?;
+    let mut database = store.load_or_create_unlocked()?;
     if n == 0 || n > database.sentences.len() {
         return Err(NanError::message(format!(
             "sentence index {n} is out of range"
@@ -17,7 +18,7 @@ pub fn run(store: &Store, n: usize) -> Result<(), NanError> {
     database
         .words
         .retain(|word| !word.source_sentence_ids.is_empty());
-    store.save(&database)?;
+    store.save_unlocked(&database)?;
 
     println!("deleted sentence {n}: {}", removed.source_text);
     Ok(())

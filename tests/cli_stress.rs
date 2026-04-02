@@ -264,6 +264,9 @@ fn token(surface: &str, lemma: Option<&str>) -> SentenceToken {
         romaji: None,
         lemma: lemma.map(str::to_string),
         gloss: None,
+        analysis: None,
+        context_gloss: None,
+        context_analysis: None,
         variants: vec![surface.to_string()],
         spans: vec![TokenSpan {
             text: surface.to_string(),

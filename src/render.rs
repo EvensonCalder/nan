@@ -135,6 +135,9 @@ mod tests {
                     romaji: Some("tokumei-san".to_string()),
                     lemma: Some("匿名さん".to_string()),
                     gloss: Some("匿名的人".to_string()),
+                    analysis: Some("称呼匿名的人".to_string()),
+                    context_gloss: Some("匿名的人".to_string()),
+                    context_analysis: Some("称呼匿名的人".to_string()),
                     variants: vec!["匿名さん".to_string()],
                     spans: vec![
                         TokenSpan {
@@ -153,6 +156,9 @@ mod tests {
                     romaji: None,
                     lemma: None,
                     gloss: None,
+                    analysis: None,
+                    context_gloss: None,
+                    context_analysis: None,
                     variants: vec!["、".to_string()],
                     spans: vec![TokenSpan {
                         text: "、".to_string(),
@@ -165,6 +171,9 @@ mod tests {
                     romaji: Some("sugoi".to_string()),
                     lemma: Some("すごい".to_string()),
                     gloss: Some("厉害".to_string()),
+                    analysis: Some("形容词".to_string()),
+                    context_gloss: Some("厉害".to_string()),
+                    context_analysis: Some("形容词".to_string()),
                     variants: vec!["すごい".to_string()],
                     spans: vec![TokenSpan {
                         text: "すごい".to_string(),
@@ -177,6 +186,9 @@ mod tests {
                     romaji: Some("desu".to_string()),
                     lemma: Some("です".to_string()),
                     gloss: Some("是".to_string()),
+                    analysis: Some("礼貌语尾".to_string()),
+                    context_gloss: Some("是".to_string()),
+                    context_analysis: Some("礼貌语尾".to_string()),
                     variants: vec!["です".to_string()],
                     spans: vec![TokenSpan {
                         text: "です".to_string(),
@@ -189,6 +201,9 @@ mod tests {
                     romaji: Some("ne".to_string()),
                     lemma: Some("ね".to_string()),
                     gloss: Some("呢".to_string()),
+                    analysis: Some("句末助词".to_string()),
+                    context_gloss: Some("呢".to_string()),
+                    context_analysis: Some("句末助词".to_string()),
                     variants: vec!["ね".to_string()],
                     spans: vec![TokenSpan {
                         text: "ね".to_string(),
@@ -201,6 +216,9 @@ mod tests {
                     romaji: None,
                     lemma: None,
                     gloss: None,
+                    analysis: None,
+                    context_gloss: None,
+                    context_analysis: None,
                     variants: vec!["。".to_string()],
                     spans: vec![TokenSpan {
                         text: "。".to_string(),

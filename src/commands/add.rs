@@ -12,14 +12,15 @@ use crate::review::INITIAL_STABILITY_DAYS;
 use crate::store::Store;
 
 pub fn run(store: &Store, sentence: String, style: Option<String>) -> Result<(), NanError> {
-    let mut database = store.load_or_create()?;
+    let _lock = store.lock()?;
+    let mut database = store.load_or_create_unlocked()?;
     let settings = database.settings.clone();
     let client = AiClient::from_settings(&settings)?;
     let prompt = build_add_user_prompt(&sentence, style.as_deref(), settings.level, settings.lan);
     let response: AddAiResponse = client.chat_json(add_system_prompt(), &prompt)?;
     let now_unix_secs = current_unix_secs()?;
     let sentence_record = insert_sentence(&mut database, response, style, now_unix_secs);
-    store.save(&database)?;
+    store.save_unlocked(&database)?;
 
     println!("{}", render_sentence(&sentence_record, &settings));
     Ok(())
@@ -56,21 +57,35 @@ pub(crate) fn insert_sentence(
         tokens: response
             .tokens
             .iter()
-            .map(|token| SentenceToken {
-                surface: token.surface.clone(),
-                reading: token.reading.clone(),
-                romaji: token.romaji.clone(),
-                lemma: token.lemma.clone(),
-                gloss: Some(token.gloss.clone()),
-                variants: token.variants.clone(),
-                spans: token
-                    .spans
-                    .iter()
-                    .map(|span| TokenSpan {
-                        text: span.text.clone(),
-                        reading: span.reading.clone(),
-                    })
-                    .collect(),
+            .map(|token| {
+                let (gloss, analysis) = find_matching_word(database, token)
+                    .map(|word| (Some(word.translation.clone()), Some(word.analysis.clone())))
+                    .unwrap_or_else(|| {
+                        (
+                            Some(resolve_word_translation(token)),
+                            Some(resolve_word_analysis(token)),
+                        )
+                    });
+
+                SentenceToken {
+                    surface: token.surface.clone(),
+                    reading: token.reading.clone(),
+                    romaji: token.romaji.clone(),
+                    lemma: token.lemma.clone(),
+                    gloss,
+                    analysis,
+                    context_gloss: Some(token.gloss.clone()),
+                    context_analysis: Some(token.analysis.clone()),
+                    variants: token.variants.clone(),
+                    spans: token
+                        .spans
+                        .iter()
+                        .map(|span| TokenSpan {
+                            text: span.text.clone(),
+                            reading: span.reading.clone(),
+                        })
+                        .collect(),
+                }
             })
             .collect(),
         word_ids: word_ids.clone(),
@@ -91,36 +106,15 @@ pub(crate) fn insert_sentence(
 }
 
 fn upsert_word(database: &mut Database, token: &crate::ai::AddAiToken, now_unix_secs: i64) -> u64 {
-    let mut lookup_values: Vec<String> = token
-        .variants
-        .iter()
-        .map(|variant| normalize_word_key(variant))
-        .filter(|variant| !variant.is_empty())
-        .collect();
-
-    lookup_values.push(normalize_word_key(&token.surface));
-    if let Some(lemma) = &token.lemma {
-        lookup_values.push(normalize_word_key(lemma));
-    }
-
-    lookup_values.sort();
-    lookup_values.dedup();
-
-    if let Some(existing_word) = database.words.iter_mut().find(|word| {
-        let existing_keys = word
-            .variants
-            .iter()
-            .map(|variant| normalize_word_key(variant))
-            .chain(std::iter::once(normalize_word_key(&word.canonical_form)))
-            .collect::<Vec<_>>();
-
-        lookup_values
-            .iter()
-            .any(|candidate| existing_keys.contains(candidate))
-    }) {
-        existing_word.lan = database.settings.lan;
-        existing_word.translation = token.gloss.clone();
-        existing_word.analysis = token.analysis.clone();
+    let target_language = database.settings.lan;
+    if let Some(existing_word) = find_matching_word_mut(database, token) {
+        existing_word.lan = target_language;
+        if let Some(translation) = token_dictionary_translation(token) {
+            existing_word.translation = translation;
+        }
+        if let Some(analysis) = token_dictionary_analysis(token) {
+            existing_word.analysis = analysis;
+        }
         existing_word.updated_at_unix_secs = now_unix_secs;
         existing_word.rewrite_status = RewriteStatus::Done;
         existing_word.rewrite_error = None;
@@ -140,10 +134,10 @@ fn upsert_word(database: &mut Database, token: &crate::ai::AddAiToken, now_unix_
 
     let word = WordRecord {
         id: database.allocate_word_id(),
-        lan: database.settings.lan,
+        lan: target_language,
         canonical_form: token.lemma.clone().unwrap_or_else(|| token.surface.clone()),
-        translation: token.gloss.clone(),
-        analysis: token.analysis.clone(),
+        translation: resolve_word_translation(token),
+        analysis: resolve_word_analysis(token),
         variants: {
             let mut variants = token.variants.clone();
             if !variants.contains(&token.surface) {
@@ -162,6 +156,84 @@ fn upsert_word(database: &mut Database, token: &crate::ai::AddAiToken, now_unix_
     let word_id = word.id;
     database.words.push(word);
     word_id
+}
+
+fn resolve_word_translation(token: &crate::ai::AddAiToken) -> String {
+    token_dictionary_translation(token).unwrap_or_else(|| token.gloss.trim().to_string())
+}
+
+fn resolve_word_analysis(token: &crate::ai::AddAiToken) -> String {
+    token_dictionary_analysis(token).unwrap_or_else(|| token.analysis.trim().to_string())
+}
+
+fn token_lookup_values(token: &crate::ai::AddAiToken) -> Vec<String> {
+    let mut lookup_values: Vec<String> = token
+        .variants
+        .iter()
+        .map(|variant| normalize_word_key(variant))
+        .filter(|variant| !variant.is_empty())
+        .collect();
+
+    lookup_values.push(normalize_word_key(&token.surface));
+    if let Some(lemma) = &token.lemma {
+        lookup_values.push(normalize_word_key(lemma));
+    }
+
+    lookup_values.sort();
+    lookup_values.dedup();
+    lookup_values
+}
+
+fn word_lookup_keys(word: &WordRecord) -> Vec<String> {
+    word.variants
+        .iter()
+        .map(|variant| normalize_word_key(variant))
+        .chain(std::iter::once(normalize_word_key(&word.canonical_form)))
+        .collect()
+}
+
+fn find_matching_word<'a>(
+    database: &'a Database,
+    token: &crate::ai::AddAiToken,
+) -> Option<&'a WordRecord> {
+    let lookup_values = token_lookup_values(token);
+    database.words.iter().find(|word| {
+        let existing_keys = word_lookup_keys(word);
+        lookup_values
+            .iter()
+            .any(|candidate| existing_keys.contains(candidate))
+    })
+}
+
+fn find_matching_word_mut<'a>(
+    database: &'a mut Database,
+    token: &crate::ai::AddAiToken,
+) -> Option<&'a mut WordRecord> {
+    let lookup_values = token_lookup_values(token);
+    database.words.iter_mut().find(|word| {
+        let existing_keys = word_lookup_keys(word);
+        lookup_values
+            .iter()
+            .any(|candidate| existing_keys.contains(candidate))
+    })
+}
+
+fn token_dictionary_translation(token: &crate::ai::AddAiToken) -> Option<String> {
+    token
+        .dictionary_gloss
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn token_dictionary_analysis(token: &crate::ai::AddAiToken) -> Option<String> {
+    token
+        .dictionary_analysis
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 pub(crate) fn current_unix_secs() -> Result<i64, NanError> {
@@ -197,6 +269,8 @@ mod tests {
                 lemma: Some("食べる".to_string()),
                 gloss: "eat".to_string(),
                 analysis: "polite present form of to eat".to_string(),
+                dictionary_gloss: Some("eat".to_string()),
+                dictionary_analysis: Some("dictionary form of to eat".to_string()),
                 variants: vec!["食べます".to_string(), "食べる".to_string()],
                 spans: vec![AddAiSpan {
                     text: "食".to_string(),
@@ -229,6 +303,8 @@ mod tests {
                     lemma: Some("猫".to_string()),
                     gloss: "猫".to_string(),
                     analysis: "名词".to_string(),
+                    dictionary_gloss: Some("猫".to_string()),
+                    dictionary_analysis: Some("名词".to_string()),
                     variants: vec!["猫".to_string()],
                     spans: vec![AddAiSpan {
                         text: "猫".to_string(),
@@ -242,6 +318,8 @@ mod tests {
                     lemma: None,
                     gloss: "句号".to_string(),
                     analysis: "标点".to_string(),
+                    dictionary_gloss: Some("句号".to_string()),
+                    dictionary_analysis: Some("标点".to_string()),
                     variants: vec!["。".to_string()],
                     spans: vec![AddAiSpan {
                         text: "。".to_string(),
@@ -254,5 +332,94 @@ mod tests {
         let sentence = insert_sentence(&mut database, response, None, 100);
         assert_eq!(database.words.len(), 1);
         assert_eq!(sentence.word_ids.len(), 1);
+    }
+
+    #[test]
+    fn insert_sentence_keeps_dictionary_meaning_separate_from_context_meaning() {
+        let mut database = Database::default();
+        let response = AddAiResponse {
+            japanese_sentence: "私は朝コーヒーを飲みません。".to_string(),
+            translated_sentence: "我早上不喝咖啡。".to_string(),
+            romaji_line: "watashi wa asa koohii o nomimasen.".to_string(),
+            furigana_line: "私[わたし]は朝[あさ]コーヒーを飲[の]みません。".to_string(),
+            tokens: vec![AddAiToken {
+                surface: "飲みません".to_string(),
+                reading: Some("のみません".to_string()),
+                romaji: Some("nomimasen".to_string()),
+                lemma: Some("飲む".to_string()),
+                gloss: "不喝".to_string(),
+                analysis: "礼貌否定形动词".to_string(),
+                dictionary_gloss: Some("喝".to_string()),
+                dictionary_analysis: Some("动词原形，表示喝".to_string()),
+                variants: vec!["飲みません".to_string(), "飲む".to_string()],
+                spans: vec![AddAiSpan {
+                    text: "飲みません".to_string(),
+                    reading: Some("のみません".to_string()),
+                }],
+            }],
+        };
+
+        let sentence = insert_sentence(&mut database, response, None, 100);
+        assert_eq!(database.words[0].canonical_form, "飲む");
+        assert_eq!(database.words[0].translation, "喝");
+        assert_eq!(database.words[0].analysis, "动词原形，表示喝");
+        assert_eq!(sentence.tokens[0].gloss.as_deref(), Some("喝"));
+        assert_eq!(sentence.tokens[0].context_gloss.as_deref(), Some("不喝"));
+        assert_eq!(
+            sentence.tokens[0].context_analysis.as_deref(),
+            Some("礼貌否定形动词")
+        );
+    }
+
+    #[test]
+    fn insert_sentence_does_not_overwrite_existing_dictionary_meaning_without_dictionary_fields() {
+        let mut database = Database::default();
+        let first = AddAiResponse {
+            japanese_sentence: "私はコーヒーを飲みます。".to_string(),
+            translated_sentence: "我喝咖啡。".to_string(),
+            romaji_line: "watashi wa koohii o nomimasu.".to_string(),
+            furigana_line: "私[わたし]は コーヒーを 飲[の]みます。".to_string(),
+            tokens: vec![AddAiToken {
+                surface: "飲みます".to_string(),
+                reading: Some("のみます".to_string()),
+                romaji: Some("nomimasu".to_string()),
+                lemma: Some("飲む".to_string()),
+                gloss: "喝".to_string(),
+                analysis: "礼貌形动词".to_string(),
+                dictionary_gloss: Some("喝".to_string()),
+                dictionary_analysis: Some("动词原形，表示喝".to_string()),
+                variants: vec!["飲みます".to_string(), "飲む".to_string()],
+                spans: vec![AddAiSpan {
+                    text: "飲みます".to_string(),
+                    reading: Some("のみます".to_string()),
+                }],
+            }],
+        };
+        let second = AddAiResponse {
+            japanese_sentence: "私はコーヒーを飲みません。".to_string(),
+            translated_sentence: "我不喝咖啡。".to_string(),
+            romaji_line: "watashi wa koohii o nomimasen.".to_string(),
+            furigana_line: "私[わたし]は コーヒーを 飲[の]みません。".to_string(),
+            tokens: vec![AddAiToken {
+                surface: "飲みません".to_string(),
+                reading: Some("のみません".to_string()),
+                romaji: Some("nomimasen".to_string()),
+                lemma: Some("飲む".to_string()),
+                gloss: "不喝".to_string(),
+                analysis: "礼貌否定形动词".to_string(),
+                dictionary_gloss: None,
+                dictionary_analysis: None,
+                variants: vec!["飲みません".to_string(), "飲む".to_string()],
+                spans: vec![AddAiSpan {
+                    text: "飲みません".to_string(),
+                    reading: Some("のみません".to_string()),
+                }],
+            }],
+        };
+
+        insert_sentence(&mut database, first, None, 100);
+        insert_sentence(&mut database, second, None, 200);
+        assert_eq!(database.words[0].translation, "喝");
+        assert_eq!(database.words[0].analysis, "动词原形，表示喝");
     }
 }

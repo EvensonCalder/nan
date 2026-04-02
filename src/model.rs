@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -119,6 +119,13 @@ impl Database {
             return Err("schema_version must be greater than 0".to_string());
         }
 
+        if self.schema_version > CURRENT_SCHEMA_VERSION {
+            return Err(format!(
+                "schema_version {} is newer than supported {}",
+                self.schema_version, CURRENT_SCHEMA_VERSION
+            ));
+        }
+
         if self.settings.ref_capacity == 0 {
             return Err("settings.ref_capacity must be greater than 0".to_string());
         }
@@ -228,7 +235,14 @@ pub struct SentenceToken {
     pub reading: Option<String>,
     pub romaji: Option<String>,
     pub lemma: Option<String>,
+    #[serde(default)]
     pub gloss: Option<String>,
+    #[serde(default)]
+    pub analysis: Option<String>,
+    #[serde(default)]
+    pub context_gloss: Option<String>,
+    #[serde(default)]
+    pub context_analysis: Option<String>,
     pub variants: Vec<String>,
     pub spans: Vec<TokenSpan>,
 }

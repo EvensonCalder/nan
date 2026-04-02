@@ -255,6 +255,10 @@ pub struct AddAiToken {
     pub lemma: Option<String>,
     pub gloss: String,
     pub analysis: String,
+    #[serde(default)]
+    pub dictionary_gloss: Option<String>,
+    #[serde(default)]
+    pub dictionary_analysis: Option<String>,
     pub variants: Vec<String>,
     pub spans: Vec<AddAiSpan>,
 }

@@ -16,7 +16,8 @@ const MIN_SHARED_CONTENT_WORDS: usize = 3;
 
 pub fn run(store: &Store, first: Option<String>, second: Option<String>) -> Result<(), NanError> {
     let args = resolve_new_args(first.as_deref(), second.as_deref())?;
-    let mut database = store.load_or_create()?;
+    let _lock = store.lock()?;
+    let mut database = store.load_or_create_unlocked()?;
     let settings = database.settings.clone();
     let client = AiClient::from_settings(&settings)?;
     let now_unix_secs = current_unix_secs()?;
@@ -89,7 +90,7 @@ pub fn run(store: &Store, first: Option<String>, second: Option<String>) -> Resu
         ));
     }
 
-    store.save(&database)?;
+    store.save_unlocked(&database)?;
     println!("{}", rendered.join("\n\n"));
     Ok(())
 }
@@ -418,6 +419,9 @@ mod tests {
             romaji: None,
             lemma: lemma.map(str::to_string),
             gloss: None,
+            analysis: None,
+            context_gloss: None,
+            context_analysis: None,
             variants: vec![surface.to_string()],
             spans: vec![TokenSpan {
                 text: surface.to_string(),
@@ -434,6 +438,8 @@ mod tests {
             lemma: lemma.map(str::to_string),
             gloss: String::new(),
             analysis: String::new(),
+            dictionary_gloss: None,
+            dictionary_analysis: None,
             variants: vec![surface.to_string()],
             spans: vec![AddAiSpan {
                 text: surface.to_string(),
