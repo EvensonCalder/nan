@@ -1,28 +1,11 @@
-use unicode_width::UnicodeWidthStr;
-
-use crate::model::{SentenceRecord, Settings, TokenSpan};
+use crate::model::{SentenceRecord, SentenceToken, Settings};
 
 #[derive(Debug, Clone)]
-struct TokenLayout {
+struct GroupCell {
     surface: String,
-    block_width: usize,
     romaji: Option<String>,
-    spans: Vec<SpanLayout>,
-    is_punctuation: bool,
-}
-
-#[derive(Debug, Clone)]
-struct SpanLayout {
-    text_width: usize,
-    start: usize,
-    reading: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Cell {
-    Empty,
-    Continuation,
-    Text(String),
+    furigana: Option<String>,
+    width: usize,
 }
 
 pub fn render_sentence(sentence: &SentenceRecord, settings: &Settings) -> String {
@@ -39,277 +22,91 @@ pub fn render_sentence(sentence: &SentenceRecord, settings: &Settings) -> String
         return lines.join("\n");
     }
 
-    let layouts = build_layouts(sentence);
-    let mut aligned_rows = Vec::new();
+    let groups = build_groups(sentence);
     if settings.romaji_enabled {
-        aligned_rows.push(render_romaji_row(&layouts));
+        lines.push(render_row(&groups, |group| group.romaji.as_deref()));
     }
     if settings.furigana_enabled {
-        aligned_rows.push(render_furigana_row(&layouts));
+        lines.push(render_row(&groups, |group| group.furigana.as_deref()));
     }
-    aligned_rows.push(render_surface_row(&layouts));
-    lines.extend(trim_common_left_margin(&aligned_rows));
+    lines.push(render_row(&groups, |group| Some(group.surface.as_str())));
     lines.join("\n")
 }
 
-fn build_layouts(sentence: &SentenceRecord) -> Vec<TokenLayout> {
-    let mut layouts = Vec::new();
+fn build_groups(sentence: &SentenceRecord) -> Vec<GroupCell> {
+    sentence.tokens.iter().map(build_group).collect()
+}
 
-    for token in &sentence.tokens {
-        let surface_width = display_width(&token.surface);
-        let romaji_width = token.romaji.as_deref().map(display_width).unwrap_or(0);
-        let spans = if token.spans.is_empty() {
-            vec![TokenSpan {
-                text: token.surface.clone(),
-                reading: token.reading.clone(),
-            }]
-        } else {
-            token.spans.clone()
-        };
-        let block_width = required_block_width(&token.surface, romaji_width, &spans);
-        let surface_start = (block_width.saturating_sub(surface_width)) / 2;
+fn build_group(token: &SentenceToken) -> GroupCell {
+    let surface = token.surface.clone();
+    let romaji = token
+        .romaji
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned);
+    let furigana = resolve_furigana(token);
+    let width = display_width(&surface)
+        .max(romaji.as_deref().map(display_width).unwrap_or(0))
+        .max(furigana.as_deref().map(display_width).unwrap_or(0));
 
-        let mut span_layouts = Vec::new();
-        let mut span_offset = 0;
-        let spans = if token.spans.is_empty() {
-            vec![TokenSpan {
-                text: token.surface.clone(),
-                reading: token.reading.clone(),
-            }]
-        } else {
-            token.spans.clone()
-        };
-
-        for span in spans {
-            let span_width = display_width(&span.text);
-            span_layouts.push(SpanLayout {
-                text_width: span_width,
-                start: surface_start + span_offset,
-                reading: span.reading,
-            });
-            span_offset += span_width;
-        }
-
-        layouts.push(TokenLayout {
-            surface: token.surface.clone(),
-            block_width,
-            romaji: token.romaji.clone(),
-            spans: span_layouts,
-            is_punctuation: is_punctuation(&token.surface),
-        });
+    GroupCell {
+        surface,
+        romaji,
+        furigana,
+        width,
     }
-
-    layouts
 }
 
-fn render_surface_row(layouts: &[TokenLayout]) -> String {
-    let mut row = String::new();
-
-    for (index, layout) in layouts.iter().enumerate() {
-        if index > 0 && !layout.is_punctuation {
-            row.push(' ');
-        }
-
-        row.push_str(&center_text_in_width(&layout.surface, layout.block_width));
-    }
-
-    row.trim_end().to_string()
-}
-
-fn render_romaji_row(layouts: &[TokenLayout]) -> String {
-    render_annotation_row(layouts, |layout| {
-        layout.romaji.as_deref().map(str::to_owned)
-    })
-}
-
-fn render_furigana_row(layouts: &[TokenLayout]) -> String {
-    let mut chunks = Vec::new();
-
-    for layout in layouts {
-        let mut cells = vec![Cell::Empty; layout.block_width];
-        for span in &layout.spans {
-            if let Some(reading) = span.reading.as_deref() {
-                let reading = reading.trim();
-                if !reading.is_empty() {
-                    place_centered_text(&mut cells, reading, span.start, span.text_width);
-                }
+fn resolve_furigana(token: &SentenceToken) -> Option<String> {
+    token
+        .reading
+        .as_deref()
+        .map(str::trim)
+        .filter(|reading| !reading.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            let joined = token
+                .spans
+                .iter()
+                .filter_map(|span| span.reading.as_deref())
+                .collect::<String>();
+            if joined.trim().is_empty() {
+                None
+            } else {
+                Some(joined)
             }
-        }
-        chunks.push(render_overlay_row(&cells));
-    }
-
-    join_chunks(layouts, &chunks)
+        })
 }
 
-fn render_annotation_row<F>(layouts: &[TokenLayout], mut annotation: F) -> String
+fn render_row<F>(groups: &[GroupCell], selector: F) -> String
 where
-    F: FnMut(&TokenLayout) -> Option<String>,
+    F: Fn(&GroupCell) -> Option<&str>,
 {
-    let mut chunks = Vec::new();
-
-    for layout in layouts {
-        let text = annotation(layout).unwrap_or_default();
-        chunks.push(center_text_in_width(&text, layout.block_width));
-    }
-
-    join_chunks(layouts, &chunks)
+    groups
+        .iter()
+        .map(|group| center_text(selector(group).unwrap_or(""), group.width))
+        .collect::<String>()
+        .trim_end()
+        .to_string()
 }
 
-fn join_chunks(layouts: &[TokenLayout], chunks: &[String]) -> String {
-    let mut row = String::new();
-
-    for (index, (layout, chunk)) in layouts.iter().zip(chunks.iter()).enumerate() {
-        if index > 0 && !layout.is_punctuation {
-            row.push(' ');
-        }
-        row.push_str(chunk);
-    }
-
-    row.trim_end().to_string()
-}
-
-fn place_centered_text(row: &mut Vec<Cell>, text: &str, target_start: usize, target_width: usize) {
-    let text_width = display_width(text);
-    if text_width == 0 {
-        return;
-    }
-
-    let mut start = if text_width > target_width {
-        target_start.saturating_sub((text_width - target_width) / 2)
-    } else {
-        target_start + (target_width - text_width) / 2
-    };
-
-    while overlaps(row, start, text_width) {
-        start += 1;
-    }
-
-    ensure_len(row, start + text_width);
-    row[start] = Cell::Text(text.to_string());
-    for cell in row.iter_mut().take(start + text_width).skip(start + 1) {
-        *cell = Cell::Continuation;
-    }
-}
-
-fn overlaps(row: &[Cell], start: usize, width: usize) -> bool {
-    if width == 0 {
-        return false;
-    }
-
-    for index in start..(start + width) {
-        if let Some(cell) = row.get(index)
-            && !matches!(cell, Cell::Empty)
-        {
-            return true;
-        }
-    }
-
-    false
-}
-
-fn ensure_len(row: &mut Vec<Cell>, len: usize) {
-    if row.len() < len {
-        row.resize(len, Cell::Empty);
-    }
-}
-
-fn render_overlay_row(row: &[Cell]) -> String {
-    let mut rendered = String::new();
-    for cell in row {
-        match cell {
-            Cell::Empty => rendered.push(' '),
-            Cell::Continuation => {}
-            Cell::Text(text) => rendered.push_str(text),
-        }
-    }
-
-    rendered.trim_end().to_string()
-}
-
-fn center_text_in_width(text: &str, width: usize) -> String {
-    let text_width = display_width(text);
-    if width <= text_width {
+fn center_text(text: &str, width: usize) -> String {
+    let content_width = display_width(text);
+    if content_width >= width {
         return text.to_string();
     }
 
-    let left_padding = (width - text_width) / 2;
-    let right_padding = width - text_width - left_padding;
-    let mut rendered = String::new();
-    rendered.push_str(&" ".repeat(left_padding));
-    rendered.push_str(text);
-    rendered.push_str(&" ".repeat(right_padding));
-    rendered
+    let padding = width - content_width;
+    let left = padding / 2;
+    let right = padding - left;
+    format!("{}{}{}", " ".repeat(left), text, " ".repeat(right))
 }
 
-fn trim_common_left_margin(rows: &[String]) -> Vec<String> {
-    let margin = rows
-        .iter()
-        .filter(|row| !row.trim().is_empty())
-        .map(|row| {
-            row.chars()
-                .take_while(|character| *character == ' ')
-                .count()
-        })
-        .min()
-        .unwrap_or(0);
-
-    rows.iter()
-        .map(|row| row.chars().skip(margin).collect::<String>())
-        .collect()
-}
-
-fn required_block_width(surface: &str, romaji_width: usize, spans: &[TokenSpan]) -> usize {
-    let surface_width = display_width(surface);
-    let mut block_width = surface_width.max(romaji_width);
-
-    loop {
-        let surface_start = (block_width.saturating_sub(surface_width)) / 2;
-        let mut span_offset = 0;
-        let mut fits = true;
-
-        for span in spans {
-            let span_width = display_width(&span.text);
-            if let Some(reading) = span.reading.as_deref() {
-                let reading_width = display_width(reading.trim());
-                if reading_width > 0 {
-                    let start =
-                        centered_start(surface_start + span_offset, span_width, reading_width);
-                    if start < 0 || (start as usize + reading_width) > block_width {
-                        fits = false;
-                        break;
-                    }
-                }
-            }
-            span_offset += span_width;
-        }
-
-        if fits {
-            return block_width.max(1);
-        }
-
-        block_width += 1;
-    }
-}
-
-fn centered_start(target_start: usize, target_width: usize, text_width: usize) -> isize {
-    if text_width > target_width {
-        target_start as isize - ((text_width - target_width) / 2) as isize
-    } else {
-        (target_start + (target_width - text_width) / 2) as isize
-    }
-}
-
-fn display_width(text: &str) -> usize {
-    UnicodeWidthStr::width_cjk(text)
-}
-
-fn is_punctuation(text: &str) -> bool {
-    text.chars().all(|character| {
-        matches!(
-            character,
-            '。' | '、' | '！' | '？' | '.' | ',' | '!' | '?' | ':' | ';' | '，' | '：' | '；'
-        )
-    })
+pub fn display_width(text: &str) -> usize {
+    text.chars()
+        .map(|character| if character.is_ascii() { 1 } else { 2 })
+        .sum()
 }
 
 #[cfg(test)]
@@ -318,61 +115,85 @@ mod tests {
         NativeLanguage, RewriteStatus, SentenceRecord, SentenceToken, Settings, TokenSpan,
     };
 
-    use super::{center_text_in_width, render_sentence, trim_common_left_margin};
+    use super::{build_groups, center_text, display_width, render_sentence};
 
     fn sample_sentence() -> SentenceRecord {
         SentenceRecord {
             id: 1,
             lan: NativeLanguage::Chinese,
-            source_text: "東京へ行く。".to_string(),
-            translated_text: "去东京。".to_string(),
+            source_text: "匿名さん、すごいですね。".to_string(),
+            translated_text: "匿名的人真厉害啊。".to_string(),
             style: None,
             created_at_unix_secs: 0,
             updated_at_unix_secs: 0,
-            romaji_line: "toukyou e iku.".to_string(),
-            furigana_line: "とうきょう へ いく。".to_string(),
+            romaji_line: "tokumei-san sugoi desu ne".to_string(),
+            furigana_line: "とくめいさん すごい です ね".to_string(),
             tokens: vec![
                 SentenceToken {
-                    surface: "東京".to_string(),
-                    reading: Some("とうきょう".to_string()),
-                    romaji: Some("toukyou".to_string()),
-                    lemma: Some("東京".to_string()),
-                    gloss: Some("Tokyo".to_string()),
-                    variants: vec!["東京".to_string()],
-                    spans: vec![TokenSpan {
-                        text: "東京".to_string(),
-                        reading: Some("とうきょう".to_string()),
-                    }],
-                },
-                SentenceToken {
-                    surface: "へ".to_string(),
-                    reading: Some("へ".to_string()),
-                    romaji: Some("e".to_string()),
-                    lemma: Some("へ".to_string()),
-                    gloss: Some("to".to_string()),
-                    variants: vec!["へ".to_string()],
-                    spans: vec![TokenSpan {
-                        text: "へ".to_string(),
-                        reading: Some("へ".to_string()),
-                    }],
-                },
-                SentenceToken {
-                    surface: "行く".to_string(),
-                    reading: Some("いく".to_string()),
-                    romaji: Some("iku".to_string()),
-                    lemma: Some("行く".to_string()),
-                    gloss: Some("go".to_string()),
-                    variants: vec!["行く".to_string()],
+                    surface: "匿名さん".to_string(),
+                    reading: Some("とくめいさん".to_string()),
+                    romaji: Some("tokumei-san".to_string()),
+                    lemma: Some("匿名さん".to_string()),
+                    gloss: Some("匿名的人".to_string()),
+                    variants: vec!["匿名さん".to_string()],
                     spans: vec![
                         TokenSpan {
-                            text: "行".to_string(),
-                            reading: Some("い".to_string()),
+                            text: "匿名".to_string(),
+                            reading: Some("とくめい".to_string()),
                         },
                         TokenSpan {
-                            text: "く".to_string(),
+                            text: "さん".to_string(),
                             reading: None,
                         },
                     ],
+                },
+                SentenceToken {
+                    surface: "、".to_string(),
+                    reading: None,
+                    romaji: None,
+                    lemma: None,
+                    gloss: None,
+                    variants: vec!["、".to_string()],
+                    spans: vec![TokenSpan {
+                        text: "、".to_string(),
+                        reading: None,
+                    }],
+                },
+                SentenceToken {
+                    surface: "すごい".to_string(),
+                    reading: Some("すごい".to_string()),
+                    romaji: Some("sugoi".to_string()),
+                    lemma: Some("すごい".to_string()),
+                    gloss: Some("厉害".to_string()),
+                    variants: vec!["すごい".to_string()],
+                    spans: vec![TokenSpan {
+                        text: "すごい".to_string(),
+                        reading: Some("すごい".to_string()),
+                    }],
+                },
+                SentenceToken {
+                    surface: "です".to_string(),
+                    reading: Some("です".to_string()),
+                    romaji: Some("desu".to_string()),
+                    lemma: Some("です".to_string()),
+                    gloss: Some("是".to_string()),
+                    variants: vec!["です".to_string()],
+                    spans: vec![TokenSpan {
+                        text: "です".to_string(),
+                        reading: Some("です".to_string()),
+                    }],
+                },
+                SentenceToken {
+                    surface: "ね".to_string(),
+                    reading: Some("ね".to_string()),
+                    romaji: Some("ne".to_string()),
+                    lemma: Some("ね".to_string()),
+                    gloss: Some("呢".to_string()),
+                    variants: vec!["ね".to_string()],
+                    spans: vec![TokenSpan {
+                        text: "ね".to_string(),
+                        reading: Some("ね".to_string()),
+                    }],
                 },
                 SentenceToken {
                     surface: "。".to_string(),
@@ -387,23 +208,49 @@ mod tests {
                     }],
                 },
             ],
-            word_ids: vec![1, 2, 3],
+            word_ids: vec![1, 2, 3, 4],
             rewrite_status: RewriteStatus::Done,
             rewrite_error: None,
         }
     }
 
     #[test]
+    fn display_width_uses_simple_fullwidth_halfwidth_rule() {
+        assert_eq!(display_width("abc"), 3);
+        assert_eq!(display_width("匿名"), 4);
+        assert_eq!(display_width("です"), 4);
+    }
+
+    #[test]
+    fn group_width_is_maximum_of_surface_and_annotations() {
+        let groups = build_groups(&sample_sentence());
+        assert_eq!(groups[0].width, display_width("とくめいさん"));
+        assert_eq!(groups[2].width, display_width("すごい"));
+        assert_eq!(groups[4].width, display_width("ね"));
+    }
+
+    #[test]
+    fn center_text_uses_minimum_padding() {
+        assert_eq!(center_text("abc", 5), " abc ");
+        assert_eq!(center_text("匿名", 6), " 匿名 ");
+    }
+
+    #[test]
+    fn punctuation_remains_visible_as_its_own_group() {
+        let groups = build_groups(&sample_sentence());
+        assert_eq!(groups[1].surface, "、");
+        assert_eq!(groups[5].surface, "。");
+    }
+
+    #[test]
     fn render_obeys_visibility_settings() {
-        let sentence = sample_sentence();
-        let settings = Settings::default();
-        let rendered = render_sentence(&sentence, &settings);
-        assert!(rendered.contains("去东京。"));
-        assert!(rendered.contains("toukyou"));
-        assert!(rendered.contains(" iku"));
-        assert!(rendered.contains("とうきょう"));
-        assert!(rendered.contains("東京"));
-        assert!(rendered.contains("行く。"));
+        let rendered = render_sentence(&sample_sentence(), &Settings::default());
+        assert!(rendered.contains("匿名的人真厉害啊。"));
+        assert!(rendered.contains("tokumei-san"));
+        assert!(rendered.contains("とくめいさん"));
+        assert!(rendered.contains("匿名さん"));
+        assert!(rendered.contains("、"));
+        assert!(rendered.contains("。"));
     }
 
     #[test]
@@ -411,27 +258,8 @@ mod tests {
         let mut sentence = sample_sentence();
         sentence.tokens.clear();
         let rendered = render_sentence(&sentence, &Settings::default());
-        assert!(rendered.contains("toukyou e iku."));
-        assert!(rendered.contains("とうきょう へ いく。"));
-        assert!(rendered.contains("東京へ行く。"));
-    }
-
-    #[test]
-    fn center_text_expands_with_spaces_without_truncation() {
-        assert_eq!(center_text_in_width("abc", 5), " abc ");
-        assert_eq!(center_text_in_width("abcdef", 3), "abcdef");
-    }
-
-    #[test]
-    fn trim_common_left_margin_shifts_all_annotation_rows_together() {
-        let rows = vec![
-            "  abc".to_string(),
-            "  def".to_string(),
-            "  ghi".to_string(),
-        ];
-        assert_eq!(
-            trim_common_left_margin(&rows),
-            vec!["abc".to_string(), "def".to_string(), "ghi".to_string()]
-        );
+        assert!(rendered.contains("tokumei-san sugoi desu ne"));
+        assert!(rendered.contains("とくめいさん すごい です ね"));
+        assert!(rendered.contains("匿名さん、すごいですね。"));
     }
 }

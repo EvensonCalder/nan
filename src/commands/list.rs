@@ -1,21 +1,22 @@
+use crate::cli::{ListTarget, resolve_list_args};
 use unicode_width::UnicodeWidthStr;
 
-use crate::cli::ListTarget;
 use crate::error::NanError;
+use crate::render::render_sentence;
 use crate::store::Store;
 
 use super::add::current_unix_secs;
 use super::cat::select_sentence_indexes;
 use super::new::weakest_word_ids;
 
-pub fn run(store: &Store, n: Option<isize>, target: Option<ListTarget>) -> Result<(), NanError> {
+pub fn run(store: &Store, first: Option<String>, second: Option<String>) -> Result<(), NanError> {
     let database = store.load_or_create()?;
-    let target = target.unwrap_or_default();
+    let args = resolve_list_args(first.as_deref(), second.as_deref())?;
     let now_unix_secs = current_unix_secs()?;
 
-    match target {
-        ListTarget::Word => list_words(&database, now_unix_secs, n),
-        ListTarget::Sentence => list_sentences(&database, now_unix_secs, n),
+    match args.target {
+        ListTarget::Word => list_words(&database, now_unix_secs, args.count),
+        ListTarget::Sentence => list_sentences(&database, now_unix_secs, args.count),
     }
 }
 
@@ -121,17 +122,26 @@ fn list_sentences(
         .map(|index| (index + 1).to_string().len())
         .max()
         .unwrap_or(1);
-    let translation_indent = " ".repeat(index_width + 2);
+    let settings = &database.settings;
+    let continuation_indent = " ".repeat(index_width + 2);
     let mut lines = Vec::new();
     for index in indexes {
         let sentence = &database.sentences[index];
-        lines.push(format!(
-            "{number:>width$}. {sentence}",
-            number = index + 1,
-            width = index_width,
-            sentence = sentence.source_text,
-        ));
-        lines.push(format!("{translation_indent}{}", sentence.translated_text));
+        let rendered = render_sentence(sentence, settings);
+        let mut rendered_lines = rendered.lines();
+
+        if let Some(first_line) = rendered_lines.next() {
+            lines.push(format!(
+                "{number:>width$}. {line}",
+                number = index + 1,
+                width = index_width,
+                line = first_line,
+            ));
+        }
+
+        for line in rendered_lines {
+            lines.push(format!("{continuation_indent}{line}"));
+        }
     }
 
     println!("{}", lines.join("\n"));
@@ -140,7 +150,7 @@ fn list_sentences(
 
 #[cfg(test)]
 mod tests {
-    use crate::model::{NativeLanguage, RewriteStatus, WordRecord};
+    use crate::model::{NativeLanguage, RewriteStatus, Settings, WordRecord};
 
     use super::{format_word_rows, list_sentences, pad_display_width};
 
@@ -193,6 +203,7 @@ mod tests {
     #[test]
     fn sentence_rows_align_translation_indent() {
         let database = crate::model::Database {
+            settings: Settings::default(),
             sentences: vec![
                 crate::model::SentenceRecord {
                     id: 1,
@@ -229,5 +240,109 @@ mod tests {
         };
 
         let _ = list_sentences(&database, 0, Some(2));
+    }
+
+    #[test]
+    fn sentence_rows_use_rendered_sentence_blocks() {
+        let database = crate::model::Database {
+            settings: Settings::default(),
+            sentences: vec![crate::model::SentenceRecord {
+                id: 1,
+                lan: NativeLanguage::Chinese,
+                source_text: "猫です。".to_string(),
+                translated_text: "这是猫。".to_string(),
+                style: None,
+                created_at_unix_secs: 0,
+                updated_at_unix_secs: 0,
+                romaji_line: "neko desu".to_string(),
+                furigana_line: "ねこ です".to_string(),
+                tokens: vec![],
+                word_ids: vec![],
+                rewrite_status: RewriteStatus::Done,
+                rewrite_error: None,
+            }],
+            ..crate::model::Database::default()
+        };
+
+        let _ = list_sentences(&database, 0, Some(1));
+    }
+
+    #[test]
+    fn word_listing_without_count_uses_all_words() {
+        let database = crate::model::Database {
+            words: vec![
+                WordRecord {
+                    id: 1,
+                    lan: NativeLanguage::Chinese,
+                    canonical_form: "私".to_string(),
+                    translation: "我".to_string(),
+                    analysis: "第一人称".to_string(),
+                    variants: vec!["私".to_string()],
+                    source_sentence_ids: vec![1],
+                    s_last_days: 0.018,
+                    t_last_unix_secs: 0,
+                    created_at_unix_secs: 0,
+                    updated_at_unix_secs: 0,
+                    rewrite_status: RewriteStatus::Done,
+                    rewrite_error: None,
+                },
+                WordRecord {
+                    id: 2,
+                    lan: NativeLanguage::Chinese,
+                    canonical_form: "猫".to_string(),
+                    translation: "猫".to_string(),
+                    analysis: "动物名词".to_string(),
+                    variants: vec!["猫".to_string()],
+                    source_sentence_ids: vec![1],
+                    s_last_days: 0.018,
+                    t_last_unix_secs: 0,
+                    created_at_unix_secs: 0,
+                    updated_at_unix_secs: 0,
+                    rewrite_status: RewriteStatus::Done,
+                    rewrite_error: None,
+                },
+            ],
+            ..crate::model::Database::default()
+        };
+
+        let rows = format_word_rows(&database.words.iter().collect::<Vec<_>>());
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn word_rows_work_without_punctuation_entries() {
+        let rows = format_word_rows(&[
+            &WordRecord {
+                id: 1,
+                lan: NativeLanguage::Chinese,
+                canonical_form: "匿名さん".to_string(),
+                translation: "匿名的人".to_string(),
+                analysis: "称呼匿名的人".to_string(),
+                variants: vec!["匿名さん".to_string()],
+                source_sentence_ids: vec![1],
+                s_last_days: 0.018,
+                t_last_unix_secs: 0,
+                created_at_unix_secs: 0,
+                updated_at_unix_secs: 0,
+                rewrite_status: RewriteStatus::Done,
+                rewrite_error: None,
+            },
+            &WordRecord {
+                id: 2,
+                lan: NativeLanguage::Chinese,
+                canonical_form: "すごい".to_string(),
+                translation: "厉害".to_string(),
+                analysis: "常用形容词".to_string(),
+                variants: vec!["すごい".to_string()],
+                source_sentence_ids: vec![1],
+                s_last_days: 0.018,
+                t_last_unix_secs: 0,
+                created_at_unix_secs: 0,
+                updated_at_unix_secs: 0,
+                rewrite_status: RewriteStatus::Done,
+                rewrite_error: None,
+            },
+        ]);
+        assert_eq!(rows.len(), 2);
     }
 }

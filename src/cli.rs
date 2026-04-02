@@ -33,8 +33,9 @@ pub enum Command {
     },
     List {
         #[arg(allow_hyphen_values = true)]
-        n: Option<isize>,
-        target: Option<ListTarget>,
+        first: Option<String>,
+        #[arg(allow_hyphen_values = true)]
+        second: Option<String>,
     },
     Del {
         n: usize,
@@ -72,12 +73,28 @@ pub struct NewArgs {
     pub style: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListArgs {
+    pub count: Option<isize>,
+    pub target: ListTarget,
+}
+
 impl Command {
     pub fn resolve_new_args(&self) -> Result<Option<NewArgs>, NanError> {
         match self {
             Self::New { first, second } => {
                 Ok(Some(resolve_new_args(first.as_deref(), second.as_deref())?))
             }
+            _ => Ok(None),
+        }
+    }
+
+    pub fn resolve_list_args(&self) -> Result<Option<ListArgs>, NanError> {
+        match self {
+            Self::List { first, second } => Ok(Some(resolve_list_args(
+                first.as_deref(),
+                second.as_deref(),
+            )?)),
             _ => Ok(None),
         }
     }
@@ -127,6 +144,60 @@ pub fn resolve_new_args(first: Option<&str>, second: Option<&str>) -> Result<New
     }
 }
 
+pub fn resolve_list_args(first: Option<&str>, second: Option<&str>) -> Result<ListArgs, NanError> {
+    match (first, second) {
+        (None, None) => Ok(ListArgs {
+            count: None,
+            target: ListTarget::Sentence,
+        }),
+        (Some(first), None) => {
+            if let Some(target) = parse_list_target(first) {
+                return Ok(ListArgs {
+                    count: None,
+                    target,
+                });
+            }
+
+            let count = parse_list_count(first)?;
+            Ok(ListArgs {
+                count: Some(count),
+                target: ListTarget::Sentence,
+            })
+        }
+        (Some(first), Some(second)) => {
+            let count = parse_list_count(first)?;
+            let target = parse_list_target(second).ok_or_else(|| {
+                NanError::message("list target must be either `word` or `sentence`")
+            })?;
+            Ok(ListArgs {
+                count: Some(count),
+                target,
+            })
+        }
+        (None, Some(_)) => Err(NanError::message(
+            "internal argument state for `nan list` is invalid",
+        )),
+    }
+}
+
+fn parse_list_count(value: &str) -> Result<isize, NanError> {
+    let count = value
+        .parse::<isize>()
+        .map_err(|_| NanError::message(format!("invalid list count: `{value}`")))?;
+    if count == 0 {
+        return Err(NanError::message("list count must not be 0"));
+    }
+    Ok(count)
+}
+
+fn parse_list_target(value: &str) -> Option<ListTarget> {
+    match value {
+        "word" => Some(ListTarget::Word),
+        "sentence" => Some(ListTarget::Sentence),
+        _ => None,
+    }
+}
+
 pub fn parse_native_language(option: &str) -> Result<NativeLanguage, NanError> {
     match option {
         "english" => Ok(NativeLanguage::English),
@@ -159,7 +230,7 @@ pub fn parse_proficiency_level(option: &str) -> Result<ProficiencyLevel, NanErro
 mod tests {
     use clap::Parser;
 
-    use super::{Cli, Command, ListTarget, resolve_new_args};
+    use super::{Cli, ListArgs, ListTarget, resolve_list_args, resolve_new_args};
 
     #[test]
     fn new_defaults_to_single_sentence() {
@@ -195,19 +266,65 @@ mod tests {
     #[test]
     fn list_defaults_to_sentence_target() {
         let cli = Cli::parse_from(["nan", "list"]);
-        let Command::List { target, .. } = cli.command else {
-            panic!("expected list command");
-        };
-        assert_eq!(target.unwrap_or_default(), ListTarget::Sentence);
+        let args = cli
+            .command
+            .resolve_list_args()
+            .expect("list args should resolve")
+            .expect("expected list args");
+        assert_eq!(args.target, ListTarget::Sentence);
+        assert_eq!(args.count, None);
+    }
+
+    #[test]
+    fn list_word_without_count_is_valid() {
+        let args = resolve_list_args(Some("word"), None).expect("list args should resolve");
+        assert_eq!(
+            args,
+            ListArgs {
+                count: None,
+                target: ListTarget::Word,
+            }
+        );
     }
 
     #[test]
     fn list_accepts_negative_values_without_double_dash() {
         let cli = Cli::parse_from(["nan", "list", "-2", "sentence"]);
-        let Command::List { n, target } = cli.command else {
-            panic!("expected list command");
-        };
-        assert_eq!(n, Some(-2));
-        assert_eq!(target, Some(ListTarget::Sentence));
+        let args = cli
+            .command
+            .resolve_list_args()
+            .expect("list args should resolve")
+            .expect("expected list args");
+        assert_eq!(args.count, Some(-2));
+        assert_eq!(args.target, ListTarget::Sentence);
+    }
+
+    #[test]
+    fn list_word_is_not_parsed_as_count() {
+        let cli = Cli::parse_from(["nan", "list", "word"]);
+        let args = cli
+            .command
+            .resolve_list_args()
+            .expect("list args should resolve")
+            .expect("expected list args");
+        assert_eq!(args.count, None);
+        assert_eq!(args.target, ListTarget::Word);
+    }
+
+    #[test]
+    fn list_rejects_zero_count() {
+        let error = resolve_list_args(Some("0"), None).expect_err("zero count should fail");
+        assert!(error.to_string().contains("list count must not be 0"));
+    }
+
+    #[test]
+    fn list_rejects_unknown_target() {
+        let error =
+            resolve_list_args(Some("3"), Some("words")).expect_err("bad target should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("list target must be either `word` or `sentence`")
+        );
     }
 }

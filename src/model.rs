@@ -137,6 +137,31 @@ impl Database {
         self.next_word_id += 1;
         id
     }
+
+    pub fn sanitize(&mut self) -> bool {
+        let punctuation_word_ids = self
+            .words
+            .iter()
+            .filter(|word| is_japanese_punctuation(&word.canonical_form))
+            .map(|word| word.id)
+            .collect::<std::collections::HashSet<_>>();
+
+        if punctuation_word_ids.is_empty() {
+            return false;
+        }
+
+        self.words
+            .retain(|word| !punctuation_word_ids.contains(&word.id));
+        for sentence in &mut self.sentences {
+            sentence
+                .word_ids
+                .retain(|word_id| !punctuation_word_ids.contains(word_id));
+        }
+
+        let next_word_id = self.words.iter().map(|word| word.id).max().unwrap_or(0) + 1;
+        self.next_word_id = self.next_word_id.max(next_word_id);
+        true
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -235,9 +260,51 @@ pub fn normalize_word_key(input: &str) -> String {
     input.trim().to_lowercase()
 }
 
+pub fn is_japanese_punctuation(text: &str) -> bool {
+    !text.trim().is_empty()
+        && text.chars().all(|character| {
+            matches!(
+                character,
+                '。' | '、'
+                    | '「'
+                    | '」'
+                    | '『'
+                    | '』'
+                    | '（'
+                    | '）'
+                    | '［'
+                    | '］'
+                    | '【'
+                    | '】'
+                    | '〈'
+                    | '〉'
+                    | '《'
+                    | '》'
+                    | '〔'
+                    | '〕'
+                    | '！'
+                    | '？'
+                    | 'ー'
+                    | '…'
+                    | '・'
+                    | '〜'
+                    | '：'
+                    | '；'
+                    | '，'
+                    | '．'
+                    | ','
+                    | '.'
+                    | '!'
+                    | '?'
+                    | ':'
+                    | ';'
+            )
+        })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::ProficiencyLevel;
+    use super::{Database, ProficiencyLevel, WordRecord, is_japanese_punctuation};
 
     #[test]
     fn proficiency_level_serializes_with_documented_values() {
@@ -251,5 +318,71 @@ mod tests {
         let parsed: ProficiencyLevel =
             serde_json::from_str("\"n55\"").expect("legacy level should parse");
         assert_eq!(parsed, ProficiencyLevel::N55);
+    }
+
+    #[test]
+    fn punctuation_detection_covers_japanese_marks() {
+        assert!(is_japanese_punctuation("。"));
+        assert!(is_japanese_punctuation("、"));
+        assert!(is_japanese_punctuation("？！"));
+        assert!(!is_japanese_punctuation("匿名"));
+    }
+
+    #[test]
+    fn database_sanitize_removes_punctuation_words() {
+        let mut database = Database {
+            words: vec![
+                WordRecord {
+                    id: 1,
+                    lan: super::NativeLanguage::Chinese,
+                    canonical_form: "。".to_string(),
+                    translation: "句号".to_string(),
+                    analysis: "标点".to_string(),
+                    variants: vec!["。".to_string()],
+                    source_sentence_ids: vec![1],
+                    s_last_days: 0.018,
+                    t_last_unix_secs: 0,
+                    created_at_unix_secs: 0,
+                    updated_at_unix_secs: 0,
+                    rewrite_status: super::RewriteStatus::Done,
+                    rewrite_error: None,
+                },
+                WordRecord {
+                    id: 2,
+                    lan: super::NativeLanguage::Chinese,
+                    canonical_form: "猫".to_string(),
+                    translation: "猫".to_string(),
+                    analysis: "名词".to_string(),
+                    variants: vec!["猫".to_string()],
+                    source_sentence_ids: vec![1],
+                    s_last_days: 0.018,
+                    t_last_unix_secs: 0,
+                    created_at_unix_secs: 0,
+                    updated_at_unix_secs: 0,
+                    rewrite_status: super::RewriteStatus::Done,
+                    rewrite_error: None,
+                },
+            ],
+            sentences: vec![super::SentenceRecord {
+                id: 1,
+                lan: super::NativeLanguage::Chinese,
+                source_text: "猫。".to_string(),
+                translated_text: "猫。".to_string(),
+                style: None,
+                created_at_unix_secs: 0,
+                updated_at_unix_secs: 0,
+                romaji_line: String::new(),
+                furigana_line: String::new(),
+                tokens: Vec::new(),
+                word_ids: vec![1, 2],
+                rewrite_status: super::RewriteStatus::Done,
+                rewrite_error: None,
+            }],
+            ..Database::default()
+        };
+
+        assert!(database.sanitize());
+        assert_eq!(database.words.len(), 1);
+        assert_eq!(database.sentences[0].word_ids, vec![2]);
     }
 }

@@ -80,6 +80,225 @@ fn add_uses_environment_configuration_and_persists_annotations_when_hidden() {
 }
 
 #[test]
+fn add_renders_cleanly_when_only_romaji_is_hidden() {
+    let temp_home = TempDir::new().expect("temp home should exist");
+    let server = MockServer::start(vec![MockResponse::json(success_body(json!({
+        "japanese_sentence": "匿名さん、すごいですね。",
+        "translated_sentence": "匿名的人真厉害啊。",
+        "romaji_line": "tokumei-san sugoi desu ne",
+        "furigana_line": "とくめいさん すごい です ね",
+        "tokens": [
+            token_json("匿名さん", Some("匿名さん"), Some("とくめいさん"), Some("tokumei-san"), "匿名的人", "称呼匿名的人", ["匿名さん"]),
+            token_json("、", Some("、"), None, None, "逗号", "标点", ["、"]),
+            token_json("すごい", Some("すごい"), Some("すごい"), Some("sugoi"), "厉害", "形容词", ["すごい"]),
+            token_json("です", Some("です"), Some("です"), Some("desu"), "是", "礼貌语尾", ["です"]),
+            token_json("ね", Some("ね"), Some("ね"), Some("ne"), "呢", "句末助词", ["ね"]),
+            token_json("。", Some("。"), None, None, "句号", "标点", ["。"])
+        ]
+    })))]);
+
+    assert_success(run_nan(
+        temp_home.path(),
+        &server.base_url,
+        &["set", "roomaji", "off"],
+    ));
+    let output = assert_success(run_nan(
+        temp_home.path(),
+        &server.base_url,
+        &["add", "匿名的人真厉害啊"],
+    ));
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(!stdout.contains("tokumei-san"));
+    assert!(stdout.contains("とくめいさん"));
+    assert!(stdout.contains("匿名さん"));
+
+    server.finish();
+}
+
+#[test]
+fn add_renders_cleanly_when_only_furigana_is_hidden() {
+    let temp_home = TempDir::new().expect("temp home should exist");
+    let server = MockServer::start(vec![MockResponse::json(success_body(json!({
+        "japanese_sentence": "匿名さん、すごいですね。",
+        "translated_sentence": "匿名的人真厉害啊。",
+        "romaji_line": "tokumei-san sugoi desu ne",
+        "furigana_line": "とくめいさん すごい です ね",
+        "tokens": [
+            token_json("匿名さん", Some("匿名さん"), Some("とくめいさん"), Some("tokumei-san"), "匿名的人", "称呼匿名的人", ["匿名さん"]),
+            token_json("、", Some("、"), None, None, "逗号", "标点", ["、"]),
+            token_json("すごい", Some("すごい"), Some("すごい"), Some("sugoi"), "厉害", "形容词", ["すごい"]),
+            token_json("です", Some("です"), Some("です"), Some("desu"), "是", "礼貌语尾", ["です"]),
+            token_json("ね", Some("ね"), Some("ね"), Some("ne"), "呢", "句末助词", ["ね"]),
+            token_json("。", Some("。"), None, None, "句号", "标点", ["。"])
+        ]
+    })))]);
+
+    assert_success(run_nan(
+        temp_home.path(),
+        &server.base_url,
+        &["set", "furigana", "off"],
+    ));
+    let output = assert_success(run_nan(
+        temp_home.path(),
+        &server.base_url,
+        &["add", "匿名的人真厉害啊"],
+    ));
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("tokumei-san"));
+    assert!(!stdout.contains("とくめいさん"));
+    assert!(stdout.contains("匿名さん"));
+
+    server.finish();
+}
+
+#[test]
+fn add_renders_cleanly_when_both_romaji_and_furigana_are_hidden() {
+    let temp_home = TempDir::new().expect("temp home should exist");
+    let server = MockServer::start(vec![MockResponse::json(success_body(json!({
+        "japanese_sentence": "匿名さん、すごいですね。",
+        "translated_sentence": "匿名的人真厉害啊。",
+        "romaji_line": "tokumei-san sugoi desu ne",
+        "furigana_line": "とくめいさん すごい です ね",
+        "tokens": [
+            token_json("匿名さん", Some("匿名さん"), Some("とくめいさん"), Some("tokumei-san"), "匿名的人", "称呼匿名的人", ["匿名さん"]),
+            token_json("、", Some("、"), None, None, "逗号", "标点", ["、"]),
+            token_json("すごい", Some("すごい"), Some("すごい"), Some("sugoi"), "厉害", "形容词", ["すごい"]),
+            token_json("です", Some("です"), Some("です"), Some("desu"), "是", "礼貌语尾", ["です"]),
+            token_json("ね", Some("ね"), Some("ね"), Some("ne"), "呢", "句末助词", ["ね"]),
+            token_json("。", Some("。"), None, None, "句号", "标点", ["。"])
+        ]
+    })))]);
+
+    assert_success(run_nan(
+        temp_home.path(),
+        &server.base_url,
+        &["set", "roomaji", "off"],
+    ));
+    assert_success(run_nan(
+        temp_home.path(),
+        &server.base_url,
+        &["set", "furigana", "off"],
+    ));
+    let output = assert_success(run_nan(
+        temp_home.path(),
+        &server.base_url,
+        &["add", "匿名的人真厉害啊"],
+    ));
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(!stdout.contains("tokumei-san"));
+    assert!(!stdout.contains("とくめいさん"));
+    assert!(stdout.contains("匿名さん"));
+
+    server.finish();
+}
+
+#[test]
+fn add_renders_cleanly_with_compact_romaji_chunks() {
+    let temp_home = TempDir::new().expect("temp home should exist");
+    let server = MockServer::start(vec![MockResponse::json(success_body(json!({
+        "japanese_sentence": "教室で写真を見ました。",
+        "translated_sentence": "我在教室里看了照片。",
+        "romaji_line": "kyoushitsu de shashin o mimashita",
+        "furigana_line": "きょうしつ で しゃしん を みました",
+        "tokens": [
+            token_json("教室", Some("教室"), Some("きょうしつ"), Some("kyoushitsu"), "教室", "地点名词", ["教室", "きょうしつ"]),
+            token_json("で", Some("で"), Some("で"), Some("de"), "在", "地点助词", ["で"]),
+            token_json("写真", Some("写真"), Some("しゃしん"), Some("shashin"), "照片", "名词", ["写真", "しゃしん"]),
+            token_json("を", Some("を"), Some("を"), Some("o"), "宾语标记", "宾语助词", ["を"]),
+            token_json("見ました", Some("見る"), Some("みました"), Some("mimashita"), "看了", "过去礼貌形动词", ["見ました", "見る"]),
+            token_json("。", Some("。"), None, None, "句号", "标点", ["。"])
+        ]
+    })))]);
+
+    let output = assert_success(run_nan(
+        temp_home.path(),
+        &server.base_url,
+        &["add", "我在教室里看了照片"],
+    ));
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("kyoushitsu"));
+    assert!(stdout.contains("shashin"));
+    assert!(stdout.contains("きょうしつ"));
+    assert!(stdout.contains("しゃしん"));
+    assert!(stdout.contains("教室"));
+    assert!(stdout.contains("写真"));
+
+    server.finish();
+}
+
+#[test]
+fn add_renders_cleanly_with_only_romaji_hidden_for_compact_chunks() {
+    let temp_home = TempDir::new().expect("temp home should exist");
+    let server = MockServer::start(vec![MockResponse::json(success_body(json!({
+        "japanese_sentence": "今日は小説を読みます。",
+        "translated_sentence": "今天我要读小说。",
+        "romaji_line": "kyou wa shousetsu o yomimasu",
+        "furigana_line": "きょう は しょうせつ を よみます",
+        "tokens": [
+            token_json("今日", Some("今日"), Some("きょう"), Some("kyou"), "今天", "时间名词", ["今日", "きょう"]),
+            token_json("は", Some("は"), Some("は"), Some("wa"), "主题标记", "主题助词", ["は"]),
+            token_json("小説", Some("小説"), Some("しょうせつ"), Some("shousetsu"), "小说", "名词", ["小説", "しょうせつ"]),
+            token_json("を", Some("を"), Some("を"), Some("o"), "宾语标记", "宾语助词", ["を"]),
+            token_json("読みます", Some("読む"), Some("よみます"), Some("yomimasu"), "读", "礼貌形动词", ["読みます", "読む"]),
+            token_json("。", Some("。"), None, None, "句号", "标点", ["。"])
+        ]
+    })))]);
+
+    assert_success(run_nan(
+        temp_home.path(),
+        &server.base_url,
+        &["set", "roomaji", "off"],
+    ));
+    let output = assert_success(run_nan(
+        temp_home.path(),
+        &server.base_url,
+        &["add", "今天我要读小说"],
+    ));
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(!stdout.contains("kyou"));
+    assert!(!stdout.contains("shousetsu"));
+    assert!(stdout.contains("きょう"));
+    assert!(stdout.contains("しょうせつ"));
+    assert!(stdout.contains("小説"));
+
+    server.finish();
+}
+
+#[test]
+fn add_renders_cleanly_with_only_furigana_hidden_for_compact_chunks() {
+    let temp_home = TempDir::new().expect("temp home should exist");
+    let server = MockServer::start(vec![MockResponse::json(success_body(json!({
+        "japanese_sentence": "詩集を買いました。",
+        "translated_sentence": "我买了诗集。",
+        "romaji_line": "shishuu o kaimashita",
+        "furigana_line": "ししゅう を かいました",
+        "tokens": [
+            token_json("詩集", Some("詩集"), Some("ししゅう"), Some("shishuu"), "诗集", "名词", ["詩集", "ししゅう"]),
+            token_json("を", Some("を"), Some("を"), Some("o"), "宾语标记", "宾语助词", ["を"]),
+            token_json("買いました", Some("買う"), Some("かいました"), Some("kaimashita"), "买了", "过去礼貌形动词", ["買いました", "買う"]),
+            token_json("。", Some("。"), None, None, "句号", "标点", ["。"])
+        ]
+    })))]);
+
+    assert_success(run_nan(
+        temp_home.path(),
+        &server.base_url,
+        &["set", "furigana", "off"],
+    ));
+    let output = assert_success(run_nan(
+        temp_home.path(),
+        &server.base_url,
+        &["add", "我买了诗集"],
+    ));
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("shishuu"));
+    assert!(!stdout.contains("ししゅう"));
+    assert!(stdout.contains("詩集"));
+
+    server.finish();
+}
+
+#[test]
 fn add_retries_transient_failures_before_succeeding() {
     let temp_home = TempDir::new().expect("temp home should exist");
     let server = MockServer::start(vec![
@@ -202,8 +421,7 @@ fn set_lan_rewrites_sentences_and_words_and_syncs_sentence_glosses() {
             "furigana_line": "猫[ねこ]です。",
             "tokens": [
                 token_json("猫", Some("猫"), Some("ねこ"), Some("neko"), "猫", "名词", ["猫", "ねこ"]),
-                token_json("です", Some("です"), Some("です"), Some("desu"), "是", "礼貌语尾", ["です"]),
-                token_json("。", Some("。"), None, None, "句号", "句末标点", ["。"])
+                token_json("です。", Some("です"), Some("です"), Some("desu"), "是", "礼貌语尾", ["です"])
             ]
         }))),
         MockResponse::json(success_body(json!({"translated_sentence": "It is a cat."}))),
@@ -212,9 +430,6 @@ fn set_lan_rewrites_sentences_and_words_and_syncs_sentence_glosses() {
         )),
         MockResponse::json(success_body(
             json!({"translation": "is", "analysis": "a polite sentence ending"}),
-        )),
-        MockResponse::json(success_body(
-            json!({"translation": "period", "analysis": "sentence-ending punctuation"}),
         )),
     ]);
 
@@ -252,9 +467,9 @@ fn set_lan_rewrites_sentences_and_words_and_syncs_sentence_glosses() {
     assert_eq!(database.words[0].translation, "cat");
 
     let requests = server.finish();
-    assert_eq!(requests.len(), 5);
+    assert_eq!(requests.len(), 4);
     assert_eq!(requests[0]["model"], TEST_MODEL);
-    assert_eq!(requests[4]["model"], TEST_MODEL);
+    assert_eq!(requests[3]["model"], TEST_MODEL);
 }
 
 #[test]

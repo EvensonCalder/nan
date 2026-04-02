@@ -25,7 +25,7 @@ pub fn run_with_cli(cli: Cli) -> Result<(), NanError> {
         Command::Add { sentence, style } => add::run(&store, sentence, style),
         Command::New { first, second } => new::run(&store, first, second),
         Command::Cat { n } => cat::run(&store, n),
-        Command::List { n, target } => list::run(&store, n, target),
+        Command::List { first, second } => list::run(&store, first, second),
         Command::Del { n } => del::run(&store, n),
         Command::Set { key, option } => set::run(&store, key, option),
     }

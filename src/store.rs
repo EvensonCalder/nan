@@ -38,21 +38,28 @@ impl Store {
             path: self.path.clone(),
             source,
         })?;
-        let database: Database =
+        let mut database: Database =
             serde_json::from_str(&contents).map_err(|source| NanError::ParseJson {
                 path: self.path.clone(),
                 source,
             })?;
 
+        database.sanitize();
         database.validate().map_err(NanError::InvalidData)?;
         Ok(database)
     }
 
     pub fn load_or_create(&self) -> Result<Database, NanError> {
-        let database = self.load()?;
+        let mut database = self.load()?;
         if !self.path.exists() {
             self.save(&database)?;
+            return Ok(database);
         }
+
+        if database.sanitize() {
+            self.save(&database)?;
+        }
+
         Ok(database)
     }
 
@@ -147,5 +154,34 @@ mod tests {
         let loaded = store.load().expect("store should reload database");
         assert_eq!(loaded, database);
         assert!(path.exists());
+    }
+
+    #[test]
+    fn load_or_create_rewrites_sanitized_database() {
+        let temporary_directory = TempDir::new().expect("temp dir should exist");
+        let path = temporary_directory.path().join("config.json");
+        let store = Store::with_path(path.clone());
+        let mut database = Database::default();
+        database.words.push(crate::model::WordRecord {
+            id: 1,
+            lan: crate::model::NativeLanguage::Chinese,
+            canonical_form: "。".to_string(),
+            translation: "句号".to_string(),
+            analysis: "标点".to_string(),
+            variants: vec!["。".to_string()],
+            source_sentence_ids: vec![1],
+            s_last_days: 0.018,
+            t_last_unix_secs: 0,
+            created_at_unix_secs: 0,
+            updated_at_unix_secs: 0,
+            rewrite_status: crate::model::RewriteStatus::Done,
+            rewrite_error: None,
+        });
+
+        store.save(&database).expect("store should save database");
+        let loaded = store
+            .load_or_create()
+            .expect("store should sanitize database");
+        assert!(loaded.words.is_empty());
     }
 }

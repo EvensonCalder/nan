@@ -4,7 +4,7 @@ use crate::ai::{AddAiResponse, AiClient};
 use crate::error::NanError;
 use crate::model::{
     Database, RewriteStatus, SentenceRecord, SentenceToken, TokenSpan, WordRecord,
-    normalize_word_key,
+    is_japanese_punctuation, normalize_word_key,
 };
 use crate::prompt::{add_system_prompt, build_add_user_prompt};
 use crate::render::render_sentence;
@@ -34,6 +34,9 @@ pub(crate) fn insert_sentence(
     let mut word_ids = Vec::new();
 
     for token in &response.tokens {
+        if is_japanese_punctuation(&token.surface) {
+            continue;
+        }
         let word_id = upsert_word(database, token, now_unix_secs);
         if !word_ids.contains(&word_id) {
             word_ids.push(word_id);
@@ -208,5 +211,48 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(database.sentences.len(), 2);
         assert_eq!(database.words[0].source_sentence_ids.len(), 2);
+    }
+
+    #[test]
+    fn insert_sentence_skips_punctuation_tokens_for_word_storage() {
+        let mut database = Database::default();
+        let response = AddAiResponse {
+            japanese_sentence: "猫です。".to_string(),
+            translated_sentence: "这是猫。".to_string(),
+            romaji_line: "neko desu.".to_string(),
+            furigana_line: "ねこ です。".to_string(),
+            tokens: vec![
+                AddAiToken {
+                    surface: "猫".to_string(),
+                    reading: Some("ねこ".to_string()),
+                    romaji: Some("neko".to_string()),
+                    lemma: Some("猫".to_string()),
+                    gloss: "猫".to_string(),
+                    analysis: "名词".to_string(),
+                    variants: vec!["猫".to_string()],
+                    spans: vec![AddAiSpan {
+                        text: "猫".to_string(),
+                        reading: Some("ねこ".to_string()),
+                    }],
+                },
+                AddAiToken {
+                    surface: "。".to_string(),
+                    reading: None,
+                    romaji: None,
+                    lemma: None,
+                    gloss: "句号".to_string(),
+                    analysis: "标点".to_string(),
+                    variants: vec!["。".to_string()],
+                    spans: vec![AddAiSpan {
+                        text: "。".to_string(),
+                        reading: None,
+                    }],
+                },
+            ],
+        };
+
+        let sentence = insert_sentence(&mut database, response, None, 100);
+        assert_eq!(database.words.len(), 1);
+        assert_eq!(sentence.word_ids.len(), 1);
     }
 }
